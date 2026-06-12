@@ -2,11 +2,11 @@
   "private": true,
   "name": "keet-bridge",
   "version": "0.1.0",
-  "description": "Keet Bridge Daemon for Hermes Agent",
+  "description": "Keet Bridge Daemon for Hermes Agent — plain Node.js, no Pear Runtime",
   "main": "index.js",
-  "pear": {
-    "name": "KeetBridge",
-    "type": "terminal"
+  "bin": "./index.js",
+  "scripts": {
+    "start": "node index.js"
   },
   "dependencies": {
     "b4a": "^1.8.1",

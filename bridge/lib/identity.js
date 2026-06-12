@@ -23,12 +23,12 @@ class IdentityManager {
     let seed
     try {
       seed = fs.readFileSync(seedPath)
-      this.mnemonic = IdentityKey.deriveSeed(seed)
+      this.mnemonic = await IdentityKey.deriveSeed(seed)
       console.log('[identity] Loaded from:', seedPath)
     } catch (err) {
       // Generate new identity
       this.mnemonic = IdentityKey.generateMnemonic()
-      seed = IdentityKey.deriveSeed(this.mnemonic)
+      seed = await IdentityKey.deriveSeed(this.mnemonic)
 
       // Save seed
       try {
@@ -38,23 +38,15 @@ class IdentityManager {
       console.log('[identity] Generated new identity')
     }
 
-    this.identity = await IdentityKey.from({ seed })
-    this.keyPair = {
-      publicKey: this.identity.identityPublicKey,
-      secretKey: this.identity.keyChain._getSecretKey(
-        this.identity.keyChain._derive(this.identity.keyChain.seed, [48, 5338, 0, 0, 0])
-      )
-    }
+    this.identity = await IdentityKey.from({ mnemonic: this.mnemonic })
+    this.keyPair = this.identity.identityKeyPair
 
     console.log('[identity] Public key:', b4a.toString(this.publicKey, 'hex'))
     return this.identity
   }
 
   getDiscoveryKeyPair () {
-    return {
-      publicKey: this.identity.profileDiscoveryPublicKey,
-      secretKey: null
-    }
+    return this.identity ? this.identity.profileDiscoveryKeyPair : null
   }
 
   static generateMnemonic () {

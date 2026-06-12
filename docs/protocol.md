@@ -2,7 +2,7 @@
 
 ## Overview
 
-Keet uses the Pear Runtime stack for P2P communication. This document
+Keet uses Hypercore/Hyperswarm for P2P communication. This document
 describes the protocol used by the Keet Bridge Daemon to participate in
 the Keet P2P network and exchange messages.
 

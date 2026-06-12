@@ -3,6 +3,7 @@ Keet platform adapter for Hermes Agent.
 
 Connects to the Keet Bridge daemon via stdio JSON protocol and relays
 messages between Keet contacts/rooms and the Hermes agent.
+Bridge runs as a plain Node.js subprocess — no Pear Runtime required.
 """
 
 import asyncio
@@ -47,9 +48,6 @@ class KeetAdapter(BasePlatformAdapter):
         platform = Platform(PLATFORM)
         super().__init__(config=config, platform=platform, **kwargs)
         self._bridge_dir = self._detect_bridge_dir()
-        self._bridge_cmd = os.environ.get(
-            "KEET_BRIDGE_CMD", ""
-        ) or self._default_bridge_cmd()
         self._process: Optional[asyncio.subprocess.Process] = None
         self._connected = False
         self._tasks: set = set()
@@ -66,16 +64,6 @@ class KeetAdapter(BasePlatformAdapter):
             return str(bridge_dir)
         return None
 
-    def _default_bridge_cmd(self) -> str:
-        """Build default bridge command from detected path."""
-        import shutil
-        pear_cmd = shutil.which("pear")
-        if not pear_cmd:
-            pear_cmd = "npx pear"
-        if self._bridge_dir:
-            return f"{pear_cmd} run {self._bridge_dir}"
-        return f"{pear_cmd} run ~/keet-bridge"
-
     async def _ensure_bridge_deps(self) -> bool:
         """Run npm install if node_modules is missing."""
         if not self._bridge_dir:
@@ -85,7 +73,7 @@ class KeetAdapter(BasePlatformAdapter):
             return True  # already installed
         logger.info("[Keet] Installing bridge dependencies (npm install)...")
         proc = await asyncio.create_subprocess_exec(
-            "npm", "install",
+            "npm", "install", "--no-audit", "--no-fund",
             cwd=self._bridge_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -113,30 +101,14 @@ class KeetAdapter(BasePlatformAdapter):
             return True
         return user_key in self._allowed_users
 
-    async def _ensure_pear(self) -> bool:
-        """Auto-install Pear Runtime if not in PATH."""
-        import shutil
-        if shutil.which("pear"):
-            return True
-        logger.info("[Keet] Installing Pear Runtime (npm i -g pear)...")
-        proc = await asyncio.create_subprocess_exec(
-            "npm", "i", "-g", "pear",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            logger.error("[Keet] pear install failed: %s", stderr.decode()[:500])
-            return False
-        logger.info("[Keet] Pear Runtime installed")
-        return True
+    def _bridge_node_cmd(self) -> list[str]:
+        """Build the command array to start the bridge via node."""
+        if not self._bridge_dir:
+            return ["node", "index.js"]
+        return ["node", os.path.join(self._bridge_dir, "index.js")]
 
     async def connect(self) -> bool:
         """Connect to the Keet Bridge daemon."""
-        if not await self._ensure_pear():
-            logger.error("[Keet] Pear Runtime setup failed")
-            return False
-
         if not await self._ensure_bridge_deps():
             logger.error("[Keet] Bridge dependency check failed")
             return False
@@ -152,15 +124,14 @@ class KeetAdapter(BasePlatformAdapter):
             return False
 
     async def _spawn_bridge(self):
-        """Spawn the Keet Bridge daemon as a subprocess."""
-        import shlex
-
-        cmd_parts = shlex.split(self._bridge_cmd)
+        """Spawn the Keet Bridge daemon as a Node.js subprocess."""
+        cmd_parts = self._bridge_node_cmd()
         self._process = await asyncio.create_subprocess_exec(
             *cmd_parts,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=self._bridge_dir,
         )
         
         task = asyncio.create_task(self._read_bridge_output())
@@ -171,7 +142,7 @@ class KeetAdapter(BasePlatformAdapter):
         self._tasks.add(task_err)
         task_err.add_done_callback(self._tasks.discard)
 
-        logger.info("[Keet] Bridge spawned: %s", self._bridge_cmd)
+        logger.info("[Keet] Bridge spawned: node index.js")
 
     async def _read_bridge_output(self):
         """Read and process JSON lines from bridge stdout."""
@@ -218,6 +189,8 @@ class KeetAdapter(BasePlatformAdapter):
             logger.error("[Keet] Bridge error: %s", event.get("message", "?"))
         elif event_type == "send_result":
             logger.info("[Keet] Sent: seq=%s", event.get("seq"))
+        elif event_type == "pong":
+            logger.debug("[Keet] Bridge ping-pong ok")
 
     async def _on_message(self, event: dict):
         """Handle an incoming message from Keet."""
@@ -330,9 +303,9 @@ class KeetAdapter(BasePlatformAdapter):
 # ── Requirements check ──────────────────────────────────────────────────
 
 def check_requirements() -> bool:
-    """Check that pear runtime is available."""
+    """Check that Node.js is available."""
     import shutil
-    if not shutil.which("pear"):
+    if not shutil.which("node"):
         return False
     return True
 
@@ -345,7 +318,7 @@ def validate_config(config: "PlatformConfig") -> bool:
 def is_connected(config: "PlatformConfig") -> bool:
     """Check if keet bridge can start."""
     import shutil
-    return shutil.which("pear") is not None
+    return shutil.which("node") is not None
 
 
 def _env_enablement(config: "PlatformConfig") -> dict:
@@ -386,8 +359,8 @@ def register(ctx) -> None:
         is_connected=is_connected,
         required_env=[],
         install_hint=(
-            "Requires Peer Runtime (npm i -g pear) and Node.js >= 20. "
-            "Bridge path is auto-detected — no manual config needed."
+            "Requires Node.js >= 20. "
+            "Bridge is auto-detected and auto-started — no manual config needed."
         ),
         setup_fn=None,
         env_enablement_fn=_env_enablement,

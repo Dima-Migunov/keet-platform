@@ -5,30 +5,29 @@ Version 0.1.0 | Author: migunov
 ## 1. Overview
 
 Keet Channel Plugin (keet-platform) is a Hermes Agent platform adapter that
-integrates the Keet P2P messenger via a Bridge Daemon running on Pear Runtime.
+integrates the Keet P2P messenger via a Bridge Daemon running as a plain Node.js process.
 
 ## 2. Architecture
 
 ```
 Hermes Agent ←→ Keet Bridge Daemon ←→ Keet P2P Network
-(Python plugin)   (Pear Terminal app)   (Hyperswarm/Hypercore)
-```
+| Hermes Agent ←→ Keet Bridge Daemon ←→ Keet P2P Network
+|(Python plugin)   (Node.js process)     (Hyperswarm/Hypercore)|
 
 | Component | Path | Description |
 |-----------|------|-------------|
 | Plugin manifest | `plugin.yaml` | Hermes plugin metadata |
 | Python adapter | `adapter.py` | Gateway platform adapter — stdio JSON bridge |
-| Bridge Daemon | `bridge/` | Pear Terminal app — P2P networking layer |
+| Bridge Daemon | `bridge/` | Node.js process — P2P networking layer |
 | Protocol spec | `docs/protocol.md` | Bridge ↔ Adapter JSON protocol |
 
 ## 3. Functional Requirements
 
 ### 3.1 Auto-Detection of Bridge
 
-- Plugin locates `bridge/` relative to `adapter.py` automatically
-- Bridge launch command: `pear run <detected_path>`
-- Fallback to `npx pear` if `pear` not in PATH
-- User **never** specifies the bridge path in standard setups
+|- Plugin locates `bridge/` relative to `adapter.py` automatically
+|- Bridge launch command: `node <detected_path>/index.js`
+|- User **never** specifies the bridge path in standard setups
 
 ### 3.2 Auto-Installation of Dependencies
 
@@ -63,9 +62,8 @@ Hermes Agent ←→ Keet Bridge Daemon ←→ Keet P2P Network
 | Requirement | Value |
 |-------------|-------|
 | Compatibility | Hermes Agent (any installation method) |
-| Node.js | >= 20 |
-| Pear Runtime | `npm i -g pear` |
-| Linux dep | `libatomic1` (apt) |
+|| Node.js | >= 18 |
+|| Linux dep | `libatomic1` (apt) |
 | Max message length | 4096 characters |
 | PII Safe | Yes |
 | Message format | Plain text |
@@ -82,22 +80,18 @@ Hermes Agent ←→ Keet Bridge Daemon ←→ Keet P2P Network
 |----------|-------------|---------|
 | `KEET_ALLOWED_USERS` | Allowed contacts (comma-separated pubkeys) | all |
 | `KEET_ALLOW_ALL_USERS` | Allow all contacts | `false` |
-| `KEET_HOME_CHANNEL` | Cron/notifications room key (hex) | unset |
-| `KEET_BRIDGE_CMD` | Override auto-detected bridge command | auto |
+|| `KEET_HOME_CHANNEL` | Cron/notifications room key (hex) | unset |
 
 ## 6. User Installation
 
 ```bash
 # 1. Install plugin
-hermes plugins install http://192.168.0.191:1300/migunov/keet-channel.git
+hermes plugins install https://github.com/Dima-Migunov/keet-channel
 
 # 2. Enable
 hermes plugins enable keet-platform
 
-# 3. Optional: restrict access
-hermes config set env_KEET_ALLOWED_USERS "pubkey1,pubkey2"
-
-# 4. Restart gateway
+# 3. Restart gateway
 hermes gateway restart
 ```
 
@@ -123,7 +117,7 @@ hermes gateway restart
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| Phase 1 | ✅ | Research (Keet, Pear, Hypercore/Hyperswarm) |
+|| Phase 1 | ✅ | Research (Keet, Hypercore/Hyperswarm) |
 | Phase 2 | ✅ | Implementation (Protocol spec, Bridge, Plugin) |
 | Phase 3 | ⬜ | Integration testing with live Keet client |
 | Phase 4 | ⬜ | Documentation and publication |

@@ -1,29 +1,13 @@
 const b4a = require('b4a')
 const hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
-const path = require('bare-path')
-const fs = require('bare-fs')
+const path = require('path')
+const fs = require('fs')
 const c = require('compact-encoding')
-
-// Message encoding schema
-const Message = {
-  encode (msg) {
-    const buf = b4a.alloc(1 + 32 + 8 + 4 + msg.content.length)
-    let off = 0
-    buf[off++] = msg.type || 0          // type (0=text, 1=image, 2=typing, etc)
-    b4a.copy(msg.sender, buf, off); off += 32  // sender pubkey
-    buf.writeUInt32BE(msg.timestamp || Date.now(), off); off += 8 // wait, 8 bytes
-    // Actually let's use compact-encoding properly
-    return c.encode(MessageEncoding, msg)
-  },
-  decode (buf) {
-    return c.decode(MessageEncoding, buf)
-  }
-}
 
 const MessageEncoding = {
   preencode (state, m) {
-    state.end = 1 + 32 + 8 + 4 + (m.content ? m.content.byteLength || Buffer.byteLength(m.content) : 0)
+    state.end = 1 + 32 + 8 + 4 + (m.content ? Buffer.byteLength(m.content, 'utf-8') : 0)
   },
   encode (state, m) {
     const buf = state.buffer
@@ -65,10 +49,8 @@ class RoomManager {
   }
 
   async init (swarm) {
-    // Create storage dir
-    try { fs.mkdirSync(path.join(this.storagePath), { recursive: true }) } catch {}
+    try { fs.mkdirSync(this.storagePath, { recursive: true }) } catch {}
 
-    // Create/replicate Hypercore
     this.core = hypercore(this.storagePath, this.key, {
       keyPair: this.keyPair,
       encodeBatch: false
@@ -77,20 +59,17 @@ class RoomManager {
     await this.core.ready()
     console.log('[room] Core ready, length:', this.core.length)
 
-    // Join Hyperswarm topic
     const topic = crypto.discoveryKey(this.key)
     const discovery = swarm.join(topic, { client: true, server: true })
     await discovery.flushed()
 
     console.log('[room] Joined swarm topic:', b4a.toString(topic, 'hex'))
 
-    // Handle incoming connections for this room
     this._replicate = swarm.on('connection', (conn, info) => {
       const stream = this.core.replicate(info.client)
       conn.pipe(stream).pipe(conn)
     })
 
-    // Watch for new blocks
     this.core.on('append', () => {
       this._processNewBlocks()
     })
@@ -108,7 +87,6 @@ class RoomManager {
           if (this._onmessage) this._onmessage(msg, i, this.key)
         }
       } catch (err) {
-        // Block not available yet
         console.log('[room] get block', i, 'failed:', err.message)
       }
     }
@@ -120,7 +98,8 @@ class RoomManager {
       return null
     }
 
-    const buf = b4a.alloc(1 + 32 + 8 + 4 + msg.content.length)
+    const contentBuf = typeof msg.content === 'string' ? b4a.from(msg.content, 'utf-8') : msg.content
+    const buf = b4a.alloc(1 + 32 + 8 + 4 + contentBuf.length)
     const state = { buffer: buf, start: 0 }
     MessageEncoding.encode(state, {
       type: msg.type || 0,
