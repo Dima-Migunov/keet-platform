@@ -6,17 +6,17 @@ A Hermes Agent gateway channel for the [Keet](https://keet.io) P2P messenger.
 
 ```
 Hermes Agent ←→ Keet Bridge Daemon ←→ Keet P2P Network
-(Python plugin)   (Node.js process)     (Hyperswarm/Hypercore)
+(Python plugin)   (Pear Runtime app)     (Hyperswarm/Hypercore)
 ```
 
 ## Requirements
 
 - **Hermes Agent** (any installation method)
-- **Node.js >= 18** — required by the Bridge daemon
+- **Pear Runtime** — via `npm i -g pear` (installed with Keet 4.16.3+)
+- **Node.js >= 18** — required by Pear Runtime
 - Linux: `sudo apt install libatomic1` (for sodium-native)
 
-> Node.js is already included with Hermes Desktop and the Hermes Docker image.
-> Only pip-based installations may lack it.
+> Pear Runtime is already bundled with Keet Desktop. Only standalone installs need `npm i -g pear`.
 
 ## Install
 
@@ -53,7 +53,7 @@ hermes config set env_KEET_ALLOWED_USERS "pubkey1,pubkey2"
 |-----------|------|-------------|
 | Plugin manifest | `plugin.yaml` | Hermes plugin metadata |
 | Python adapter | `adapter.py` | Hermes Gateway platform adapter — spawns bridge subprocess |
-| Bridge Daemon | `bridge/` | Node.js process — Keet P2P networking over stdio JSON |
+| Bridge Daemon | `bridge/` | Pear Runtime app — Keet P2P networking over stdio JSON |
 | Protocol spec | `docs/protocol.md` | Bridge ↔ Adapter JSON protocol |
 | Technical spec | `docs/spec.md` | Full technical specification |
 
@@ -61,8 +61,8 @@ hermes config set env_KEET_ALLOWED_USERS "pubkey1,pubkey2"
 
 - ✅ Phase 1: Research (keet-identity-key, Hypercore, Hyperswarm)
 - ✅ Protocol spec (`docs/protocol.md`)
-- ✅ Bridge Daemon — plain Node.js, no Pear Runtime
-- ✅ Hermes Plugin — auto-spawns bridge subprocess
+- ✅ Bridge Daemon — Pear Runtime app with shared DHT and storage
+- ✅ Hermes Plugin — auto-spawns bridge via `pear run`
 - ⬜ Phase 3: Bridge testing with a running Keet client
 - ⬜ Phase 4: Full documentation
 

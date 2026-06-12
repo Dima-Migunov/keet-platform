@@ -3,7 +3,7 @@ Keet platform adapter for Hermes Agent.
 
 Connects to the Keet Bridge daemon via stdio JSON protocol and relays
 messages between Keet contacts/rooms and the Hermes agent.
-Bridge runs as a plain Node.js subprocess — no Pear Runtime required.
+Bridge runs as a Pear Runtime app — uses Pear's shared DHT and storage.
 """
 
 import asyncio
@@ -103,10 +103,10 @@ class KeetAdapter(BasePlatformAdapter):
         return user_key in self._allowed_users
 
     def _bridge_node_cmd(self) -> list[str]:
-        """Build the command array to start the bridge via node."""
+        """Build the Pear run command for the bridge."""
         if not self._bridge_dir:
-            return ["node", "index.js"]
-        return ["node", os.path.join(self._bridge_dir, "index.js")]
+            return ["pear", "run", "index.js"]
+        return ["pear", "run", os.path.join(self._bridge_dir, "index.js")]
 
     async def connect(self) -> bool:
         """Connect to the Keet Bridge daemon."""
@@ -125,7 +125,7 @@ class KeetAdapter(BasePlatformAdapter):
             return False
 
     async def _spawn_bridge(self):
-        """Spawn the Keet Bridge daemon as a Node.js subprocess."""
+        """Spawn the Keet Bridge daemon via Pear Runtime."""
         cmd_parts = self._bridge_node_cmd()
         self._process = await asyncio.create_subprocess_exec(
             *cmd_parts,
@@ -143,7 +143,7 @@ class KeetAdapter(BasePlatformAdapter):
         self._tasks.add(task_err)
         task_err.add_done_callback(self._tasks.discard)
 
-        logger.info("[Keet] Bridge spawned: node index.js")
+        logger.info("[Keet] Bridge spawned via Pear: %s", " ".join(cmd_parts))
 
     async def _read_bridge_output(self):
         """Read and process JSON lines from bridge stdout."""
@@ -335,9 +335,9 @@ class KeetAdapter(BasePlatformAdapter):
 # ── Requirements check ──────────────────────────────────────────────────
 
 def check_requirements() -> bool:
-    """Check that Node.js is available."""
+    """Check that Pear Runtime is available."""
     import shutil
-    if not shutil.which("node"):
+    if not shutil.which("pear"):
         return False
     return True
 
@@ -348,9 +348,9 @@ def validate_config(config: "PlatformConfig") -> bool:
 
 
 def is_connected(config: "PlatformConfig") -> bool:
-    """Check if keet bridge can start."""
+    """Check if Pear Runtime is available."""
     import shutil
-    return shutil.which("node") is not None
+    return shutil.which("pear") is not None
 
 
 def _env_enablement(config: "PlatformConfig") -> dict:
@@ -391,7 +391,7 @@ def register(ctx) -> None:
         is_connected=is_connected,
         required_env=[],
         install_hint=(
-            "Requires Node.js >= 20. "
+            "Requires Pear Runtime (npm i -g pear) and Node.js >= 20. "
             "Bridge is auto-detected and auto-started — no manual config needed."
         ),
         setup_fn=None,

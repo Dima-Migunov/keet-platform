@@ -9,7 +9,12 @@ const IdentityManager = require('./lib/identity')
 const RoomManager = require('./lib/room')
 const JsonStdio = require('./lib/stdio')
 
-const STORAGE = process.env.KEET_BRIDGE_STORAGE || './data'
+// Detect Pear Runtime environment
+const inPear = typeof Pear !== 'undefined'
+
+process.title = 'keet-bridge'
+
+const STORAGE = inPear ? Pear.config.storage : (process.env.KEET_BRIDGE_STORAGE || './data')
 
 class KeetBridge {
   constructor () {
@@ -30,7 +35,7 @@ class KeetBridge {
     await this.identity.load()
     console.log('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
 
-    this.dht = new DHT()
+    this.dht = inPear ? DHT.from(Pear.config) : new DHT()
 
     this.swarm = new Hyperswarm()
     this.swarm.on('connection', (conn, info) => {
