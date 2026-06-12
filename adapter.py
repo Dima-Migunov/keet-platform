@@ -338,13 +338,37 @@ def check_requirements() -> bool:
     """Check that Pear Runtime is available."""
     import shutil
     if not shutil.which("pear"):
+        logger.error(
+            "[Keet] Pear Runtime not found. "
+            "Install: npm i -g pear"
+        )
         return False
+    _check_pear_path()
     return True
+
+
+def _check_pear_path() -> None:
+    """Check that Pear's own bin dir is on PATH (avoids startup warning)."""
+    import pathlib
+    pear_bin = pathlib.Path.home() / ".config" / "pear" / "bin"
+    if pear_bin.is_dir() and str(pear_bin) not in os.environ.get("PATH", ""):
+        logger.warning(
+            "[Keet] Pear bin dir (%s) not in PATH. "
+            "Run 'pear run pear://runtime' to fix, "
+            "or manually append it to your shell rc file.",
+            pear_bin
+        )
 
 
 def validate_config(config: "PlatformConfig") -> bool:
     """Validate keet platform configuration."""
-    return check_requirements()
+    ok = check_requirements()
+    if not ok:
+        logger.error(
+            "[Keet] Validation failed — Pear Runtime is required. "
+            "Install: npm i -g pear"
+        )
+    return ok
 
 
 def is_connected(config: "PlatformConfig") -> bool:

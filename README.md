@@ -17,6 +17,12 @@ Hermes Agent ←→ Keet Bridge Daemon ←→ Keet P2P Network
 - Linux: `sudo apt install libatomic1` (for sodium-native)
 
 > Pear Runtime is already bundled with Keet Desktop. Only standalone installs need `npm i -g pear`.
+>
+> After installing Pear, finalize the setup:
+> ```bash
+> pear run pear://runtime
+> ```
+> This configures the PATH so Pear's own tools are found without warnings.
 
 ## Install
 

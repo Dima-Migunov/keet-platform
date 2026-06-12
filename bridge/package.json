@@ -10,7 +10,7 @@
     "version": "0.1.0"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "pear run index.js"
   },
   "dependencies": {
     "b4a": "^1.8.1",
