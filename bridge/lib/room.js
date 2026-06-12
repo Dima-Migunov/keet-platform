@@ -34,62 +34,85 @@ const MessageEncoding = {
 }
 
 class RoomManager {
-  constructor (key, keyPair, storagePath) {
-    this.key = key
-    this.keyPair = keyPair
-    this.storagePath = path.join(storagePath, 'rooms', b4a.toString(key, 'hex'))
+  /**
+   * @param {Buffer} identityKey - Bridge's identity public key (core key)
+   * @param {Object} identityKeyPair - Bridge's identity keypair {publicKey, secretKey}
+   * @param {string} storagePath - Base storage directory
+   * @param {Buffer|null} topicKey - Swarm topic key for discovery (room key from config)
+   */
+  constructor (identityKey, identityKeyPair, storagePath, topicKey) {
+    this.identityKey = identityKey
+    this.identityKeyPair = identityKeyPair
+    this.topicKey = topicKey || identityKey  // fallback to identity key as topic
+    this.storagePath = path.join(storagePath, 'rooms', b4a.toString(this.topicKey, 'hex'))
     this.core = null
     this.swarm = null
     this._replicates = []
     this._onmessage = null
+    this._onready = null
+    this._lastSeq = 0
   }
 
   set onmessage (fn) {
     this._onmessage = fn
   }
 
+  set onready (fn) {
+    this._onready = fn
+  }
+
+  get keyHex () {
+    return b4a.toString(this.topicKey, 'hex')
+  }
+
   async init (swarm) {
     try { fs.mkdirSync(this.storagePath, { recursive: true }) } catch {}
 
-    this.core = hypercore(this.storagePath, this.key, {
-      keyPair: this.keyPair,
+    // Core is always keyed by the bridge's identity → bridge is owner → can write
+    this.core = new hypercore(this.storagePath, this.identityKey, {
+      keyPair: this.identityKeyPair,
       encodeBatch: false
     })
 
     await this.core.ready()
+    this._lastSeq = this.core.length
     console.log('[room] Core ready, length:', this.core.length)
 
-    const topic = crypto.discoveryKey(this.key)
+    // Join swarm topic = discoveryKey(topicKey) for room discovery
+    const topic = crypto.discoveryKey(this.topicKey)
     const discovery = swarm.join(topic, { client: true, server: true })
     await discovery.flushed()
-
     console.log('[room] Joined swarm topic:', b4a.toString(topic, 'hex'))
 
-    this._replicate = swarm.on('connection', (conn, info) => {
-      const stream = this.core.replicate(info.client)
-      conn.pipe(stream).pipe(conn)
-    })
-
+    // Listen for appended blocks (replicated from peers or our own writes)
     this.core.on('append', () => {
       this._processNewBlocks()
     })
 
+    if (this._onready) this._onready()
     return this
   }
 
   async _processNewBlocks () {
     const length = this.core.length
-    for (let i = 0; i < length; i++) {
+    if (length <= this._lastSeq) return
+
+    for (let i = this._lastSeq; i < length; i++) {
       try {
         const block = await this.core.get(i)
         if (block) {
           const msg = MessageEncoding.decode({ buffer: block, start: 0 })
-          if (this._onmessage) this._onmessage(msg, i, this.key)
+          // Skip our own messages (already logged on send)
+          if (this._onmessage) {
+            this._onmessage(msg, i, this.topicKey)
+          }
         }
       } catch (err) {
-        console.log('[room] get block', i, 'failed:', err.message)
+        console.log('[room] get block', i, 'not ready:', err.message)
       }
     }
+
+    this._lastSeq = Math.max(this._lastSeq, length)
   }
 
   async append (msg) {
@@ -109,13 +132,14 @@ class RoomManager {
     })
 
     const seq = await this.core.append(buf.slice(0, state.start))
-    console.log('[room] Appended block', seq)
+    console.log('[room] Appended block', seq, 'to room', this.keyHex.slice(0, 16))
+    this._lastSeq = seq + 1
     return seq
   }
 
-  async close () {
-    if (this.core) await this.core.close()
-    if (this.swarm) this._replicates.forEach(r => r())
+  close () {
+    if (this.core) this.core.close()
+    this._replicates.forEach(r => r())
   }
 }
 

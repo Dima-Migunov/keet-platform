@@ -54,6 +54,7 @@ class KeetAdapter(BasePlatformAdapter):
         self._buffer = ""
         self._allowed_users = self._parse_allowed()
         self._home_channel = os.environ.get(HOME_CHANNEL_ENV, "").strip()
+        self._bridge_public_key = ""
 
     def _detect_bridge_dir(self) -> Optional[str]:
         """Locate the bridge directory relative to the plugin."""
@@ -191,6 +192,13 @@ class KeetAdapter(BasePlatformAdapter):
             logger.info("[Keet] Sent: seq=%s", event.get("seq"))
         elif event_type == "pong":
             logger.debug("[Keet] Bridge ping-pong ok")
+        elif event_type == "identity":
+            logger.info("[Keet] Bridge identity: %s", event.get("public_key", "?")[:16])
+            self._bridge_public_key = event.get("public_key", "")
+        elif event_type == "connect_result":
+            logger.info("[Keet] Connected to peer: %s", event.get("pubkey", "?")[:16])
+        elif event_type == "join_result":
+            logger.info("[Keet] Joined room: %s", event.get("room_key", "?")[:16])
 
     async def _on_message(self, event: dict):
         """Handle an incoming message from Keet."""
@@ -264,6 +272,30 @@ class KeetAdapter(BasePlatformAdapter):
             await self._process.stdin.drain()
             return SendResult(ok=True)
         return SendResult(ok=False, error="No stdin")
+
+    async def _send_command(self, cmd: dict) -> None:
+        """Send a JSON command to the bridge stdin."""
+        if not self._process or not self._process.stdin:
+            return
+        line = json.dumps(cmd) + "\n"
+        self._process.stdin.write(line.encode("utf-8"))
+        await self._process.stdin.drain()
+
+    async def get_identity(self) -> dict:
+        """Request bridge identity info."""
+        await self._send_command({"command": "get_identity"})
+        return {}  # response arrives via _handle_bridge_event
+
+    async def join_room(self, room_key: str) -> None:
+        """Tell bridge to join a Keet room's swarm topic."""
+        await self._send_command({"command": "join_room", "room_key": room_key})
+
+    async def connect_to_user(self, pubkey: str, room_key: Optional[str] = None) -> None:
+        """Tell bridge to connect to a user by their public key."""
+        cmd = {"command": "connect_to_user", "pubkey": pubkey}
+        if room_key:
+            cmd["room_key"] = room_key
+        await self._send_command(cmd)
 
     async def get_chat_info(self, chat_id: str) -> dict:
         """Return basic chat info."""

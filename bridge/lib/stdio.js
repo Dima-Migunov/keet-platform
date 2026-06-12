@@ -51,6 +51,15 @@ class JsonStdio {
       case 'get_chat_info':
         this._cmdGetChatInfo(params.chat_id)
         break
+      case 'get_identity':
+        this._cmdGetIdentity()
+        break
+      case 'join_room':
+        this._cmdJoinRoom(params.room_key)
+        break
+      case 'connect_to_user':
+        this._cmdConnectToUser(params.pubkey, params.room_key)
+        break
       case 'ping':
         this.send({ type: 'pong' })
         break
@@ -59,12 +68,49 @@ class JsonStdio {
     }
   }
 
+  _cmdGetIdentity () {
+    if (!this.bridge.identity) {
+      this.send({ type: 'error', command: 'get_identity', message: 'not_ready' })
+      return
+    }
+    this.send({
+      type: 'identity',
+      public_key: b4a.toString(this.bridge.identity.publicKey, 'hex'),
+      profile_discovery_key: b4a.toString(this.bridge.identity.identity.profileDiscoveryPublicKey, 'hex')
+    })
+  }
+
+  async _cmdJoinRoom (roomKeyHex) {
+    try {
+      const key = b4a.from(roomKeyHex, 'hex')
+      if (this.bridge.rooms.has(roomKeyHex)) {
+        this.send({ type: 'join_result', room_key: roomKeyHex, status: 'already_joined' })
+        return
+      }
+      const room = await this.bridge.createRoom(key)
+      this.send({ type: 'join_result', room_key: roomKeyHex, status: 'joined' })
+    } catch (err) {
+      this.send({ type: 'error', command: 'join_room', message: err.message })
+    }
+  }
+
+  async _cmdConnectToUser (pubkeyHex, roomKeyHex) {
+    try {
+      const pubkey = b4a.from(pubkeyHex, 'hex')
+      console.log('[stdio] Connecting to user:', pubkeyHex.slice(0, 16) + '...')
+      await this.bridge.connectToPeer(pubkey, roomKeyHex ? b4a.from(roomKeyHex, 'hex') : null)
+      this.send({ type: 'connect_result', pubkey: pubkeyHex, status: 'connected' })
+    } catch (err) {
+      this.send({ type: 'error', command: 'connect_to_user', message: err.message })
+    }
+  }
+
   async _cmdSendMessage (chatId, text) {
     try {
       const key = b4a.from(chatId, 'hex')
       let room = this.bridge.rooms.get(chatId)
       if (!room) {
-        room = await this.bridge.createRoom(key, this.bridge.identity.keyPair)
+        room = await this.bridge.createRoom(key)
       }
       const seq = await room.append({
         type: 0,
