@@ -24,8 +24,15 @@ def test_check_requirements_pear_missing():
         assert adapter.check_requirements() is False
 
 
+def test_check_requirements_pear_local():
+    """check_requirements returns True when pear is in local node_modules/.bin."""
+    with patch("shutil.which", return_value=None):
+        with patch("pathlib.Path.is_file", return_value=True):
+            assert adapter.check_requirements() is True
+
+
 def test_check_requirements_calls_pear_path_check():
-    """When pear is found, _check_pear_path is called."""
+    """When pear is found on system PATH, _check_pear_path is called."""
     with patch("shutil.which", return_value="/usr/local/bin/pear"):
         with patch.object(adapter, "_check_pear_path") as mock:
             adapter.check_requirements()
@@ -65,21 +72,81 @@ class TestBridgeNodeCmd:
     """Tests for KeetAdapter._bridge_node_cmd."""
 
     def test_no_bridge_dir_found(self):
-        """When _bridge_dir is None, returns ['pear', 'run', 'index.js']."""
+        """When _bridge_dir is None, uses _pear_cmd() + ['run', 'index.js']."""
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_dir = None
-        assert a._bridge_node_cmd() == ["pear", "run", "index.js"]
+        cmd = a._bridge_node_cmd()
+        # First element should be a pear path (from _pear_cmd())
+        assert len(cmd) == 3
+        assert cmd[1] == "run"
+        assert cmd[2] == "index.js"
 
     def test_with_bridge_dir(self):
         """When _bridge_dir is set, returns full path to index.js."""
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_dir = "/some/path/bridge"
-        expected = ["pear", "run", "/some/path/bridge/index.js"]
-        assert a._bridge_node_cmd() == expected
+        cmd = a._bridge_node_cmd()
+        assert len(cmd) == 3
+        assert cmd[1] == "run"
+        assert cmd[2] == "/some/path/bridge/index.js"
 
     def test_command_starts_with_pear_run(self):
-        """The first two elements are always pear and run."""
+        """The second and third elements are always 'run' and the script."""
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_dir = None
         cmd = a._bridge_node_cmd()
-        assert cmd[:2] == ["pear", "run"]
+        assert cmd[1] == "run"
+
+
+class TestPearCmd:
+    """Tests for _pear_cmd()."""
+
+    def test_pear_cmd_system(self):
+        """Returns [path] from shutil.which when pear is on PATH."""
+        with patch("shutil.which", return_value="/usr/local/bin/pear"):
+            result = adapter._pear_cmd()
+            assert result == ["/usr/local/bin/pear"]
+
+    def test_pear_cmd_local(self):
+        """Returns [path] from node_modules/.bin/pear when not on PATH."""
+        with patch("shutil.which", return_value=None):
+            with patch("pathlib.Path.is_file", return_value=True):
+                result = adapter._pear_cmd()
+                assert len(result) == 1
+                assert result[0].endswith("pear")
+
+    def test_pear_cmd_fallback(self):
+        """Returns ['pear'] when not found anywhere."""
+        with patch("shutil.which", return_value=None):
+            with patch("pathlib.Path.is_file", return_value=False):
+                result = adapter._pear_cmd()
+                assert result == ["pear"]
+
+
+class TestAddBinToPath:
+    """Tests for _add_bin_to_path()."""
+
+    def test_adds_bin_dir_when_missing(self):
+        """Adds node_modules/.bin to PATH when dir exists and not already in PATH."""
+        with patch("pathlib.Path.is_dir", return_value=True):
+            with patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}, clear=True):
+                adapter._add_bin_to_path()
+                path = os.environ.get("PATH", "")
+                assert "node_modules/.bin" in path
+
+    def test_does_not_duplicate_when_already_in_path(self):
+        """Does not add node_modules/.bin if already present."""
+        # Compute the actual bin dir that _add_bin_to_path would check
+        actual_bin = str(adapter._PLUGIN_DIR / "node_modules" / ".bin")
+        with patch("pathlib.Path.is_dir", return_value=True):
+            with patch.dict(os.environ, {"PATH": f"{actual_bin}:/usr/bin"}, clear=True):
+                adapter._add_bin_to_path()
+                count = os.environ["PATH"].count(actual_bin)
+                assert count == 1
+
+    def test_skips_when_dir_does_not_exist(self):
+        """Does nothing when node_modules/.bin does not exist."""
+        with patch("pathlib.Path.is_dir", return_value=False):
+            with patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+                adapter._add_bin_to_path()
+                assert os.environ["PATH"] == "/usr/bin"

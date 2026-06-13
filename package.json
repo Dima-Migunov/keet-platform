@@ -1,5 +1,8 @@
 {
   "private": true,
+  "dependencies": {
+    "pear": "^2.0.4"
+  },
   "scripts": {
     "postinstall": "cd bridge && npm install --no-audit --no-fund"
   }

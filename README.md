@@ -45,6 +45,61 @@ Optionally restrict access to specific contacts:
 hermes config set env_KEET_ALLOWED_USERS "pubkey1,pubkey2"
 ```
 
+## Auto-Install Flow
+
+The plugin comes with an auto-install system that reduces friction for new users:
+
+### Automatic dependency management
+
+1. **Pear as npm dependency** — `package.json` declares `"pear": "^2.0.4"` as a direct dependency.
+   This means `npm install` in the plugin root installs Pear locally into
+   `node_modules/.bin/pear`, so no global install is required.
+
+2. **On-first-connect auto-install** — `_ensure_node_deps()` in `adapter.py` checks
+   whether `node_modules/` exists. If missing, it runs `npm install --ignore-scripts`
+   automatically when the gateway starts the adapter.
+
+3. **Smart Pear discovery** — `_pear_cmd()` searches for the `pear` binary in this order:
+   1. System PATH (`shutil.which("pear")`)
+   2. Plugin-local `node_modules/.bin/pear`
+   3. Fallback to bare `"pear"` (trusts it will be available at runtime)
+
+4. **PATH management** — `_add_bin_to_path()` adds the plugin's `node_modules/.bin`
+   directory to `os.environ['PATH']` at adapter init time, so locally-installed
+   tools are found without requiring a global install.
+
+### Setup script
+
+Run `bash scripts/setup.sh` for an interactive guided setup:
+
+```
+Keet Platform setup
+Plugin directory: /path/to/keet-platform
+
+Checking Node.js... Node.js v20.11.0 found
+Checking npm... npm 10.2.4 found
+Checking Pear Runtime...
+Pear Runtime not found.
+Install Pear Runtime now? (Y/n): Y
+Installing Pear Runtime...
+Pear Runtime installed locally in node_modules
+
+Setting up Keet Bridge...
+Bridge dependencies already installed
+Setup completed successfully!
+```
+
+The setup script:
+- Checks Node.js >= 18
+- Checks/installs Pear Runtime (with user confirmation)
+- Installs bridge dependencies
+- Verifies the installation
+
+### Gateway setup integration
+
+`hermes gateway setup` invokes `_setup_fn()`, which runs `scripts/setup.sh`
+automatically when the platform is configured.
+
 ## Configuration
 
 | Variable | Description | Default |
@@ -60,6 +115,8 @@ hermes config set env_KEET_ALLOWED_USERS "pubkey1,pubkey2"
 | Plugin manifest | `plugin.yaml` | Hermes plugin metadata |
 | Python adapter | `adapter.py` | Hermes Gateway platform adapter — spawns bridge subprocess |
 | Bridge Daemon | `bridge/` | Pear Runtime app — Keet P2P networking over stdio JSON |
+| Auto-install script | `scripts/setup.sh` | Interactive guided setup |
+| Post-install guide | `after-install.md` | Next steps shown after plugin install |
 | Protocol spec | `docs/protocol.md` | Bridge ↔ Adapter JSON protocol |
 | Technical spec | `docs/spec.md` | Full technical specification |
 
@@ -69,6 +126,8 @@ hermes config set env_KEET_ALLOWED_USERS "pubkey1,pubkey2"
 - ✅ Protocol spec (`docs/protocol.md`)
 - ✅ Bridge Daemon — Pear Runtime app with shared DHT and storage
 - ✅ Hermes Plugin — auto-spawns bridge via `pear run`
+- ✅ Auto-install — Pear as npm dep, PATH management, setup script
+- ✅ Post-install guide (`after-install.md`)
 - ⬜ Phase 3: Bridge testing with a running Keet client
 - ⬜ Phase 4: Full documentation
 

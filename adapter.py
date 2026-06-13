@@ -10,6 +10,8 @@ import asyncio
 import json
 import logging
 import os
+import pathlib
+import shutil
 from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
@@ -37,16 +39,83 @@ HOME_CHANNEL_ENV = "KEET_HOME_CHANNEL"
 ALLOWED_USERS_ENV = "KEET_ALLOWED_USERS"
 ALLOW_ALL_ENV = "KEET_ALLOW_ALL_USERS"
 
+# Plugin root directory — used for node_modules/.bin discovery
+_PLUGIN_DIR = pathlib.Path(__file__).resolve().parent
+
+
+def _add_bin_to_path() -> None:
+    """Add the plugin's node_modules/.bin directory to PATH if present.
+
+    This ensures locally-installed Pear and other Node.js tools
+    can be found without a global install.
+    """
+    bin_dir = _PLUGIN_DIR / "node_modules" / ".bin"
+    if bin_dir.is_dir():
+        current_path = os.environ.get("PATH", "")
+        bin_str = str(bin_dir)
+        if bin_str not in current_path:
+            os.environ["PATH"] = f"{bin_str}{os.pathsep}{current_path}"
+            logger.debug("[Keet] Added %s to PATH", bin_str)
+
+
+async def _ensure_node_deps() -> bool:
+    """Install root-level npm dependencies (pear) if node_modules is missing.
+
+    Returns True if dependencies are already installed or were installed
+    successfully. Returns False on failure.
+    """
+    node_modules = _PLUGIN_DIR / "node_modules"
+    if node_modules.is_dir():
+        return True
+
+    logger.info("[Keet] Installing Node.js dependencies (npm install)...")
+    proc = await asyncio.create_subprocess_exec(
+        "npm", "install", "--ignore-scripts",
+        cwd=str(_PLUGIN_DIR),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.error("[Keet] npm install failed: %s", stderr.decode()[:500])
+        return False
+    _add_bin_to_path()
+    logger.info("[Keet] Node.js dependencies installed")
+    return True
+
+
+def _pear_cmd() -> list[str]:
+    """Resolve the 'pear' command, searching in order:
+    1. System PATH (shutil.which)
+    2. Local node_modules/.bin
+    3. Fallback: just 'pear' (trust it's on PATH at runtime)
+
+    Returns e.g. ['/usr/local/bin/pear'] or ['node_modules/.bin/pear'] or ['pear'].
+    """
+    # 1. System PATH
+    system_pear = shutil.which("pear")
+    if system_pear:
+        return [system_pear]
+
+    # 2. Local node_modules
+    local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
+    if local_pear.is_file():
+        return [str(local_pear)]
+
+    # 3. Fallback
+    return ["pear"]
+
 
 class KeetAdapter(BasePlatformAdapter):
     """Adapter for Keet P2P messenger via the Keet Bridge daemon."""
 
     PLATFORM = PLATFORM
-    
+
     def __init__(self, config: Optional["PlatformConfig"] = None, **kwargs):
         from gateway.config import Platform
         platform = Platform(PLATFORM)
         super().__init__(config=config, platform=platform, **kwargs)
+        _add_bin_to_path()
         self._bridge_dir = self._detect_bridge_dir()
         self._process: Optional[asyncio.subprocess.Process] = None
         self._connected = False
@@ -58,20 +127,18 @@ class KeetAdapter(BasePlatformAdapter):
 
     def _detect_bridge_dir(self) -> Optional[str]:
         """Locate the bridge directory relative to the plugin."""
-        import pathlib
-        plugin_dir = pathlib.Path(__file__).resolve().parent
-        bridge_dir = plugin_dir / "bridge"
+        bridge_dir = _PLUGIN_DIR / "bridge"
         if bridge_dir.is_dir() and (bridge_dir / "package.json").exists():
             return str(bridge_dir)
         return None
 
     async def _ensure_bridge_deps(self) -> bool:
-        """Run npm install if node_modules is missing."""
+        """Run npm install if node_modules is missing in the bridge dir."""
         if not self._bridge_dir:
             return False
         node_modules = os.path.join(self._bridge_dir, "node_modules")
         if os.path.isdir(node_modules):
-            return True  # already installed
+            return True
         logger.info("[Keet] Installing bridge dependencies (npm install)...")
         proc = await asyncio.create_subprocess_exec(
             "npm", "install", "--no-audit", "--no-fund",
@@ -103,13 +170,25 @@ class KeetAdapter(BasePlatformAdapter):
         return user_key in self._allowed_users
 
     def _bridge_node_cmd(self) -> list[str]:
-        """Build the Pear run command for the bridge."""
+        """Build the Pear run command for the bridge.
+
+        Uses _pear_cmd() to resolve the pear binary — supports
+        global install, local node_modules, or fallback.
+        """
+        pear = _pear_cmd()
         if not self._bridge_dir:
-            return ["pear", "run", "index.js"]
-        return ["pear", "run", os.path.join(self._bridge_dir, "index.js")]
+            return pear + ["run", "index.js"]
+        return pear + ["run", os.path.join(self._bridge_dir, "index.js")]
 
     async def connect(self) -> bool:
-        """Connect to the Keet Bridge daemon."""
+        """Connect to the Keet Bridge daemon.
+
+        Ensures npm dependencies are installed before spawning the bridge.
+        """
+        if not await _ensure_node_deps():
+            logger.error("[Keet] Node dependencies check failed")
+            return False
+
         if not await self._ensure_bridge_deps():
             logger.error("[Keet] Bridge dependency check failed")
             return False
@@ -134,7 +213,7 @@ class KeetAdapter(BasePlatformAdapter):
             stderr=asyncio.subprocess.PIPE,
             cwd=self._bridge_dir,
         )
-        
+
         task = asyncio.create_task(self._read_bridge_output())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -284,7 +363,7 @@ class KeetAdapter(BasePlatformAdapter):
     async def get_identity(self) -> dict:
         """Request bridge identity info."""
         await self._send_command({"command": "get_identity"})
-        return {}  # response arrives via _handle_bridge_event
+        return {}
 
     async def join_room(self, room_key: str) -> None:
         """Tell bridge to join a Keet room's swarm topic."""
@@ -335,21 +414,29 @@ class KeetAdapter(BasePlatformAdapter):
 # ── Requirements check ──────────────────────────────────────────────────
 
 def check_requirements() -> bool:
-    """Check that Pear Runtime is available."""
-    import shutil
-    if not shutil.which("pear"):
-        logger.error(
-            "[Keet] Pear Runtime not found. "
-            "Install: npm i -g pear"
-        )
-        return False
-    _check_pear_path()
-    return True
+    """Check that Pear Runtime is available.
+
+    Checks both system PATH and local node_modules/.bin.
+    """
+    # Check system PATH
+    if shutil.which("pear"):
+        _check_pear_path()
+        return True
+
+    # Check local node_modules
+    local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
+    if local_pear.is_file():
+        return True
+
+    logger.error(
+        "[Keet] Pear Runtime not found. "
+        "Install: npm i -g pear, or run 'npm install' in plugin root."
+    )
+    return False
 
 
 def _check_pear_path() -> None:
     """Check that Pear's own bin dir is on PATH (avoids startup warning)."""
-    import pathlib
     pear_bin = pathlib.Path.home() / ".config" / "pear" / "bin"
     if pear_bin.is_dir() and str(pear_bin) not in os.environ.get("PATH", ""):
         logger.warning(
@@ -372,9 +459,11 @@ def validate_config(config: "PlatformConfig") -> bool:
 
 
 def is_connected(config: "PlatformConfig") -> bool:
-    """Check if Pear Runtime is available."""
-    import shutil
-    return shutil.which("pear") is not None
+    """Check if Pear Runtime is available — system or local."""
+    if shutil.which("pear"):
+        return True
+    local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
+    return local_pear.is_file()
 
 
 def _env_enablement(config: "PlatformConfig") -> dict:
@@ -385,13 +474,13 @@ def _env_enablement(config: "PlatformConfig") -> dict:
         home = (config.extra or {}).get("home_channel", "")
     if home:
         env[HOME_CHANNEL_ENV] = home
-    
+
     allowed = os.environ.get(ALLOWED_USERS_ENV, "")
     if not allowed:
         allowed = (config.extra or {}).get("allowed_users", "")
     if allowed:
         env[ALLOWED_USERS_ENV] = allowed
-    
+
     return env
 
 
@@ -400,6 +489,34 @@ def _standalone_send(chat_id: str, text: str, **kwargs) -> dict:
     adapter = KeetAdapter()
     result = asyncio.run(adapter.send(chat_id, text))
     return {"ok": result.ok, "error": result.error}
+
+
+# ── Auto-install setup function ────────────────────────────────────────
+
+def _setup_fn(config: "PlatformConfig") -> None:
+    """Run the interactive setup script via setup.sh.
+
+    Called by Hermes on 'hermes gateway setup' when setup_fn is configured.
+    """
+    import subprocess
+    import sys
+    import pathlib as _plib
+
+    setup_script = _PLUGIN_DIR / "scripts" / "setup.sh"
+    if not setup_script.is_file():
+        logger.error("[Keet] setup.sh not found at %s", setup_script)
+        print(f"Error: setup.sh not found at {setup_script}", file=sys.stderr)
+        return
+
+    logger.info("[Keet] Running setup script...")
+    result = subprocess.run(
+        ["bash", str(setup_script)],
+        cwd=str(_PLUGIN_DIR),
+    )
+    if result.returncode != 0:
+        logger.error("[Keet] Setup script failed (exit %d)", result.returncode)
+    else:
+        logger.info("[Keet] Setup completed successfully")
 
 
 # ── Registration ────────────────────────────────────────────────────────
@@ -418,7 +535,7 @@ def register(ctx) -> None:
             "Requires Pear Runtime (npm i -g pear) and Node.js >= 20. "
             "Bridge is auto-detected and auto-started — no manual config needed."
         ),
-        setup_fn=None,
+        setup_fn=_setup_fn,
         env_enablement_fn=_env_enablement,
         cron_deliver_env_var=HOME_CHANNEL_ENV,
         standalone_sender_fn=_standalone_send,
