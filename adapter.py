@@ -149,6 +149,8 @@ class KeetAdapter(BasePlatformAdapter):
         self._welcome_room_key = ""
         self._dynamic_allowed: set[str] = set()
         self._welcomed_contacts: set = set()
+        self._bridge_ready = asyncio.Event()
+        self._startup_stderr: list[str] = []
 
     def _detect_bridge_dir(self) -> Optional[str]:
         """Locate the bridge directory relative to the plugin."""
@@ -214,6 +216,7 @@ class KeetAdapter(BasePlatformAdapter):
         """Connect to the Keet Bridge daemon.
 
         Ensures npm dependencies are installed before spawning the bridge.
+        Waits for bridge to signal readiness (identity event) or fail.
         """
         if not await _ensure_node_deps():
             logger.error("[Keet] Node dependencies check failed")
@@ -225,9 +228,42 @@ class KeetAdapter(BasePlatformAdapter):
 
         try:
             await self._spawn_bridge()
+
+            # Wait for bridge readiness OR process exit
+            ready_task = asyncio.create_task(self._wait_bridge_ready())
+            exit_task = asyncio.create_task(self._wait_process_exit())
+
+            done, pending = await asyncio.wait(
+                [ready_task, exit_task],
+                timeout=30.0,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in pending:
+                task.cancel()
+
+            # If the process exited before we got a ready signal, it's a failure
+            if exit_task in done:
+                exit_code = exit_task.result()
+                stderr_log = "\n".join(self._startup_stderr[-20:])
+                logger.error(
+                    "[Keet] Bridge exited during startup (code %d). Stderr:\n%s",
+                    exit_code or -1,
+                    stderr_log or "(empty)",
+                )
+                self._connected = False
+                return False
+
             self._connected = True
             logger.info("[Keet] Adapter connected")
+            logger.info("[Keet] Bridge public key: %s", self._bridge_public_key)
+            logger.info("[Keet] Welcome room key: %s", self._welcome_room_key)
             return True
+
+        except asyncio.TimeoutError:
+            logger.error("[Keet] Bridge startup timed out after 30s")
+            self._connected = False
+            return False
         except Exception as e:
             logger.error("[Keet] Failed to connect: %s", e)
             self._connected = False
@@ -254,6 +290,16 @@ class KeetAdapter(BasePlatformAdapter):
 
         logger.info("[Keet] Bridge spawned via Pear: %s", " ".join(cmd_parts))
 
+    async def _wait_bridge_ready(self) -> None:
+        """Wait for bridge to signal readiness (identity event)."""
+        await self._bridge_ready.wait()
+
+    async def _wait_process_exit(self) -> Optional[int]:
+        """Wait for the bridge process to exit unexpectedly during startup."""
+        if not self._process:
+            return None
+        return await self._process.wait()
+
     async def _read_bridge_output(self):
         """Read and process JSON lines from bridge stdout."""
         while self._process and self._process.stdout:
@@ -270,13 +316,16 @@ class KeetAdapter(BasePlatformAdapter):
                 break
 
     async def _read_bridge_stderr(self):
-        """Log bridge stderr."""
+        """Log and capture bridge stderr for startup diagnostics."""
         while self._process and self._process.stderr:
             try:
                 line = await self._process.stderr.readline()
                 if not line:
                     break
-                logger.debug("[Keet] Bridge: %s", line.decode("utf-8", errors="replace").strip())
+                text = line.decode("utf-8", errors="replace").strip()
+                if text:
+                    self._startup_stderr.append(text)
+                    logger.debug("[Keet] Bridge: %s", text)
             except Exception:
                 break
 
@@ -302,8 +351,10 @@ class KeetAdapter(BasePlatformAdapter):
         elif event_type == "pong":
             logger.debug("[Keet] Bridge ping-pong ok")
         elif event_type == "identity":
-            logger.info("[Keet] Bridge identity: %s", event.get("public_key", "?")[:16])
-            self._bridge_public_key = event.get("public_key", "")
+            pubkey = event.get("public_key", "")
+            self._bridge_public_key = pubkey
+            logger.info("[Keet] Bridge identity: %s", pubkey)
+            self._bridge_ready.set()
         elif event_type == "connect_result":
             logger.info("[Keet] Connected to peer: %s", event.get("pubkey", "?")[:16])
         elif event_type == "join_result":
@@ -314,7 +365,8 @@ class KeetAdapter(BasePlatformAdapter):
         elif event_type == "welcome_room_ready":
             room_key = event.get("room_key", "")
             self._welcome_room_key = room_key
-            logger.info("[Keet] Welcome room ready: %s", room_key[:16] if room_key else "?")
+            logger.info("[Keet] Welcome room ready: %s", room_key)
+            self._bridge_ready.set()
 
     async def _on_message(self, event: dict):
         """Handle an incoming message from Keet."""
