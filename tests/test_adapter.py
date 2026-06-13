@@ -184,7 +184,11 @@ class TestWelcomeOnFirstContact:
     """Tests for welcome message on first contact."""
 
     async def _make_adapter(self, allowed: str = "") -> adapter.KeetAdapter:
-        """Helper to create a KeetAdapter with patched dependencies."""
+        """Helper to create a KeetAdapter with patched dependencies.
+
+        When ``allowed`` is empty (no env restriction), _is_allowed returns
+        True for any key so the welcome tests work.
+        """
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_dir = None
         a._process = None
@@ -193,12 +197,15 @@ class TestWelcomeOnFirstContact:
         a._buffer = ""
         a._home_channel = ""
         a._bridge_public_key = ""
+        a._welcome_room_key = ""
+        a._dynamic_allowed = set()
         a._welcomed_contacts = set()
         if allowed:
             a._allowed_users = {k.strip() for k in allowed.split(",") if k.strip()}
         else:
-            a._allowed_users = None  # allow all
-        # on_message is defined on the parent — set a noop for standalone tests
+            # Allow all — set up _is_allowed to always return True
+            a._allowed_users = None
+            a._allow_all = lambda: True
         a.on_message = AsyncMock()
         return a
 

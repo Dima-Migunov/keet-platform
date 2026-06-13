@@ -61,16 +61,24 @@ class PairingManager {
   }
 
   /**
-   * Start a DHT noise-pipe server on a discoveryKey.
+   * Start listening on the DHT for incoming candidate connections.
+   *
+   * In HyperDHT v6 the server is automatically bound to the DHT node –
+   * we need to listen on a unique ephemeral keypair so we don't conflict
+   * with the bridge's own identity or profile servers.
    */
   _startServer(discoveryKey, dkHex) {
+    const keyPair = require('hypercore-crypto').keyPair()
     const server = this.dht.createServer()
     server.on('connection', noiseSocket => {
       noiseSocket.on('data', rawBuf => {
         this._handleIncoming(rawBuf, noiseSocket)
       })
+      noiseSocket.on('error', () => {})
     })
-    server.listen(discoveryKey)
+    server.listen(keyPair).catch(err => {
+      console.error('[pairing] listen error:', err.message)
+    })
     this._servers.set(dkHex, server)
   }
 
