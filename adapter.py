@@ -382,8 +382,13 @@ class KeetAdapter(BasePlatformAdapter):
             url = event.get("url", "")
             self._last_invite_url = url
             logger.info("[Keet] Invite created: %s", url)
+        elif event_type == "pairing_request":
+            logger.info("[Keet] Pairing request from %s for ticket %s",
+                        event.get("pubkey", "?")[:16],
+                        event.get("ticket", "?")[:16])
         elif event_type == "member_joined":
             pubkey = event.get("pubkey", "")
+            room_key = event.get("room_key", "")
             logger.info("[Keet] Member joined: %s in %s", pubkey[:16], room_key[:16] if room_key else "?")
             self.add_allowed_user(pubkey)
         elif event_type == "pairing_result":
@@ -548,6 +553,10 @@ class KeetAdapter(BasePlatformAdapter):
     async def cancel_invite(self, ticket: str) -> None:
         """Cancel an invite by ticket."""
         await self._send_command({"command": "cancel_invite", "ticket": ticket})
+
+    async def invite_cancel(self, ticket: str) -> None:
+        """Alias for cancel_invite (naming from TZ)."""
+        await self.cancel_invite(ticket)
 
     async def pairing_list(self) -> None:
         """Request the list of active invite sessions and pending candidates."""
