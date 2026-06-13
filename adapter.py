@@ -151,6 +151,7 @@ class KeetAdapter(BasePlatformAdapter):
         self._welcomed_contacts: set = set()
         self._bridge_ready = asyncio.Event()
         self._startup_stderr: list[str] = []
+        self._last_invite_url: Optional[str] = None
 
     def _detect_bridge_dir(self) -> Optional[str]:
         """Locate the bridge directory relative to the plugin."""
@@ -377,6 +378,26 @@ class KeetAdapter(BasePlatformAdapter):
             self._welcome_room_key = room_key
             logger.info("[Keet] Welcome room ready: %s", room_key)
             self._bridge_ready.set()
+        elif event_type == "invite_created":
+            url = event.get("url", "")
+            self._last_invite_url = url
+            logger.info("[Keet] Invite created: %s", url)
+        elif event_type == "member_joined":
+            pubkey = event.get("pubkey", "")
+            logger.info("[Keet] Member joined: %s in %s", pubkey[:16], room_key[:16] if room_key else "?")
+            self.add_allowed_user(pubkey)
+        elif event_type == "pairing_result":
+            logger.info("[Keet] Pairing result: candidate %s → %s",
+                        event.get("candidate_id", "?")[:16],
+                        event.get("status", "?"))
+        elif event_type == "cancel_invite_result":
+            logger.info("[Keet] Invite %s: %s",
+                        event.get("ticket", "?")[:16],
+                        event.get("status", "?"))
+        elif event_type == "pairing_list":
+            logger.info("[Keet] Pairing list received: %d sessions, %d pending",
+                        len(event.get("sessions", [])),
+                        len(event.get("pending", [])))
 
     async def _on_message(self, event: dict):
         """Handle an incoming message from Keet."""
@@ -504,6 +525,33 @@ class KeetAdapter(BasePlatformAdapter):
         """Send a welcome message to a user by their public key."""
         await self._send_command({"command": "send_welcome", "pubkey": pubkey})
         return True
+
+    async def create_invite(self, room_key: Optional[str] = None) -> None:
+        """Send a command to create an invite URL.
+
+        The URL arrives via the 'invite_created' event and is
+        stored in self._last_invite_url.
+        """
+        cmd: dict = {"command": "create_invite"}
+        if room_key:
+            cmd["room_key"] = room_key
+        await self._send_command(cmd)
+
+    async def accept_pairing(self, candidate_id: str) -> None:
+        """Accept a pending pairing request."""
+        await self._send_command({"command": "accept_pairing", "candidate_id": candidate_id})
+
+    async def decline_pairing(self, candidate_id: str) -> None:
+        """Decline a pending pairing request."""
+        await self._send_command({"command": "decline_pairing", "candidate_id": candidate_id})
+
+    async def cancel_invite(self, ticket: str) -> None:
+        """Cancel an invite by ticket."""
+        await self._send_command({"command": "cancel_invite", "ticket": ticket})
+
+    async def pairing_list(self) -> None:
+        """Request the list of active invite sessions and pending candidates."""
+        await self._send_command({"command": "pairing_list"})
 
     async def get_identity(self) -> dict:
         """Request bridge identity info."""

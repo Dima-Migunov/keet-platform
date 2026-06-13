@@ -8,6 +8,7 @@ const DHT = require('hyperdht')
 
 const IdentityManager = require('./lib/identity')
 const RoomManager = require('./lib/room')
+const PairingManager = require('./lib/pairing')
 const JsonStdio = require('./lib/stdio')
 
 process.title = 'keet-bridge'
@@ -21,6 +22,7 @@ class KeetBridge {
     this.swarm = null
     this.dht = null
     this.rooms = new Map()
+    this.pairing = null
     this.stdio = null
     this._listening = false
     this._peerConnections = new Map()
@@ -38,6 +40,9 @@ class KeetBridge {
     this.dht = new DHT({
       keyPair: this.identity.keyPair,
     })
+
+    // Blind-pairing for invite links
+    this.pairing = new PairingManager(this.dht, this)
 
     this.swarm = new Hyperswarm({
       keyPair: this.identity.keyPair,
@@ -263,7 +268,7 @@ class KeetBridge {
   async stop () {
     this._listening = false
     if (this.swarm) await this.swarm.destroy()
-    if (this.dht) await this.dht.destroy()
+    if (this.dht) { this.pairing?.close(); await this.dht.destroy() }
     if (this.profileServer) await this.profileServer.close()
     if (this.stdio) await this.stdio.stop()
     for (const room of this.rooms.values()) {

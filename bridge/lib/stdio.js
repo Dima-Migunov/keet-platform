@@ -63,6 +63,21 @@ class JsonStdio {
       case 'send_welcome':
         this._cmdSendWelcome(params.pubkey)
         break
+      case 'create_invite':
+        this._cmdCreateInvite(params.room_key)
+        break
+      case 'pairing_list':
+        this._cmdPairingList()
+        break
+      case 'accept_pairing':
+        this._cmdAcceptPairing(params.candidate_id)
+        break
+      case 'decline_pairing':
+        this._cmdDeclinePairing(params.candidate_id)
+        break
+      case 'cancel_invite':
+        this._cmdCancelInvite(params.ticket)
+        break
       case 'ping':
         this.send({ type: 'pong' })
         break
@@ -133,6 +148,59 @@ class JsonStdio {
       this.send({ type: 'send_welcome_result', pubkey: pubkeyHex, status: 'ok' })
     } catch (err) {
       this.send({ type: 'error', command: 'send_welcome', message: err.message })
+    }
+  }
+
+  async _cmdCreateInvite (roomKeyHex) {
+    try {
+      const topicKey = roomKeyHex
+        ? b4a.from(roomKeyHex, 'hex')
+        : require('hypercore-crypto').randomBytes(32)
+
+      const result = await this.bridge.pairing.createInvite(topicKey)
+      this.send({ type: 'invite_created', ...result })
+    } catch (err) {
+      this.send({ type: 'error', command: 'create_invite', message: err.message })
+    }
+  }
+
+  _cmdPairingList () {
+    try {
+      const pm = this.bridge.pairing
+      this.send({
+        type: 'pairing_list',
+        sessions: pm.getSessions(),
+        pending: pm.getPending()
+      })
+    } catch (err) {
+      this.send({ type: 'error', command: 'pairing_list', message: err.message })
+    }
+  }
+
+  async _cmdAcceptPairing (candidateId) {
+    try {
+      const ok = await this.bridge.pairing.acceptCandidate(candidateId)
+      this.send({ type: 'pairing_result', candidate_id: candidateId, status: ok ? 'accepted' : 'not_found' })
+    } catch (err) {
+      this.send({ type: 'error', command: 'accept_pairing', message: err.message })
+    }
+  }
+
+  async _cmdDeclinePairing (candidateId) {
+    try {
+      const ok = await this.bridge.pairing.declineCandidate(candidateId)
+      this.send({ type: 'pairing_result', candidate_id: candidateId, status: ok ? 'declined' : 'not_found' })
+    } catch (err) {
+      this.send({ type: 'error', command: 'decline_pairing', message: err.message })
+    }
+  }
+
+  async _cmdCancelInvite (ticket) {
+    try {
+      const ok = this.bridge.pairing.cancelInvite(ticket)
+      this.send({ type: 'cancel_invite_result', ticket, status: ok ? 'cancelled' : 'not_found' })
+    } catch (err) {
+      this.send({ type: 'error', command: 'cancel_invite', message: err.message })
     }
   }
 
