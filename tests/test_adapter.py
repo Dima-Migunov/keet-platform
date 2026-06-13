@@ -78,30 +78,28 @@ class TestBridgeNodeCmd:
     """Tests for KeetAdapter._bridge_node_cmd."""
 
     def test_no_bridge_dir_found(self):
-        """When _bridge_dir is None, uses _pear_cmd() + ['run', 'index.js']."""
+        """When _bridge_dir is None, returns node followed by 'index.js'."""
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_dir = None
         cmd = a._bridge_node_cmd()
-        # First element should be a pear path (from _pear_cmd())
-        assert len(cmd) == 3
-        assert cmd[1] == "run"
-        assert cmd[2] == "index.js"
+        # First element should be a node path (from _node_cmd())
+        assert len(cmd) == 2
+        assert cmd[1] == "index.js"
 
     def test_with_bridge_dir(self):
-        """When _bridge_dir is set, returns full path to index.js."""
+        """When _bridge_dir is set, returns node + full path to index.js."""
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_dir = "/some/path/bridge"
         cmd = a._bridge_node_cmd()
-        assert len(cmd) == 3
-        assert cmd[1] == "run"
-        assert cmd[2] == "/some/path/bridge/index.js"
+        assert len(cmd) == 2
+        assert cmd[1] == "/some/path/bridge/index.js"
 
-    def test_command_starts_with_pear_run(self):
-        """The second and third elements are always 'run' and the script."""
+    def test_command_starts_with_node(self):
+        """First element is always a node path."""
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_dir = None
         cmd = a._bridge_node_cmd()
-        assert cmd[1] == "run"
+        assert cmd[0].endswith("node") or "/node" in cmd[0]
 
 
 class TestPearCmd:
@@ -255,6 +253,7 @@ class TestAdapterPublicAPI:
         a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
         a._bridge_public_key = kwargs.get("pubkey", "")
         a._welcome_room_key = kwargs.get("welcome_key", "")
+        a._last_invite_url = kwargs.get("last_invite_url", None)
         a._allowed_users = kwargs.get("allowed_users", None)
         a._dynamic_allowed = kwargs.get("dynamic_allowed", set())
         return a
