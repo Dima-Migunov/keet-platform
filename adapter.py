@@ -79,6 +79,21 @@ def _npm_cmd() -> str:
     return "npm"
 
 
+def _node_path_env() -> dict[str, str]:
+    """Return env with PATH extended so node/npm are found in subprocesses.
+
+    The gateway may have a stripped PATH; ensure /usr/local/bin (where node
+    typically lives) is included so npm's '#!env node' shebang works.
+    """
+    env = dict(os.environ)
+    node_bin = os.path.dirname(
+        shutil.which("node") or "/usr/local/bin/node"
+    )
+    if node_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
+    return env
+
+
 async def _ensure_node_deps() -> bool:
     """Install root-level npm dependencies (pear) if node_modules is missing.
 
@@ -94,6 +109,7 @@ async def _ensure_node_deps() -> bool:
     proc = await asyncio.create_subprocess_exec(
         npm, "install", "--ignore-scripts",
         cwd=str(_PLUGIN_DIR),
+        env=_node_path_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -174,6 +190,7 @@ class KeetAdapter(BasePlatformAdapter):
             cwd=self._bridge_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_node_path_env(),
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
@@ -616,25 +633,41 @@ class KeetAdapter(BasePlatformAdapter):
 # ── Requirements check ──────────────────────────────────────────────────
 
 def check_requirements() -> bool:
-    """Check that Pear Runtime is available.
+    """Check that Node.js and the bridge dependencies are available.
 
-    Checks both system PATH and local node_modules/.bin.
+    The bridge runs directly via Node.js — Pear Runtime is no longer
+    required unless KEET_USE_PEAR env is explicitly set.
     """
-    # Check system PATH
-    if shutil.which("pear"):
-        _check_pear_path()
-        return True
+    if not shutil.which("node"):
+        logger.error(
+            "[Keet] Node.js not found. Install Node.js >= 18: "
+            "https://nodejs.org/en/download/"
+        )
+        return False
 
-    # Check local node_modules
-    local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
-    if local_pear.is_file():
-        return True
+    bridge_dir = _PLUGIN_DIR / "bridge"
+    if not (bridge_dir / "node_modules").is_dir():
+        logger.warning(
+            "[Keet] Bridge dependencies not installed — "
+            "will run npm install on connect."
+        )
+        # Not a hard blocker — _ensure_bridge_deps will handle it
 
-    logger.error(
-        "[Keet] Pear Runtime not found. "
-        "Install: npm i -g pear, or run 'npm install' in plugin root."
-    )
-    return False
+    # If KEET_USE_PEAR is set, also check for pear
+    if os.environ.get("KEET_USE_PEAR", "").lower() == "true":
+        if shutil.which("pear"):
+            _check_pear_path()
+            return True
+        local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
+        if local_pear.is_file():
+            return True
+        logger.error(
+            "[Keet] KEET_USE_PEAR is set but Pear Runtime is not found. "
+            "Install: npm i -g pear, or run 'npm install' in plugin root."
+        )
+        return False
+
+    return True
 
 
 def _check_pear_path() -> None:
@@ -654,18 +687,18 @@ def validate_config(config: "PlatformConfig") -> bool:
     ok = check_requirements()
     if not ok:
         logger.error(
-            "[Keet] Validation failed — Pear Runtime is required. "
-            "Install: npm i -g pear"
+            "[Keet] Validation failed — Node.js is required. "
+            "Install Node.js >= 18: https://nodejs.org/en/download/"
         )
     return ok
 
 
 def is_connected(config: "PlatformConfig") -> bool:
-    """Check if Pear Runtime is available — system or local."""
-    if shutil.which("pear"):
-        return True
-    local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
-    return local_pear.is_file()
+    """Check if Node.js is available."""
+    if not shutil.which("node"):
+        return False
+    bridge_dir = _PLUGIN_DIR / "bridge" / "node_modules"
+    return bridge_dir.is_dir()
 
 
 def _env_enablement(config: "PlatformConfig") -> dict:
