@@ -129,6 +129,30 @@ class TestPearCmd:
                 assert result == ["pear"]
 
 
+class TestNpmCmd:
+    """Tests for _npm_cmd()."""
+
+    def test_npm_cmd_via_shutil(self):
+        """Returns path from shutil.which when npm is on PATH."""
+        with patch("shutil.which", return_value="/usr/local/bin/npm"):
+            result = adapter._npm_cmd()
+            assert result == "/usr/local/bin/npm"
+
+    def test_npm_cmd_via_common_path(self):
+        """Falls back to common paths when shutil.which returns None."""
+        with patch("shutil.which", return_value=None):
+            with patch("pathlib.Path.is_file", return_value=True):
+                result = adapter._npm_cmd()
+                assert result in ("/usr/local/bin/npm", "/usr/bin/npm", "/opt/homebrew/bin/npm")
+
+    def test_npm_cmd_fallback(self):
+        """Returns 'npm' as last resort when nothing is found."""
+        with patch("shutil.which", return_value=None):
+            with patch("pathlib.Path.is_file", return_value=False):
+                result = adapter._npm_cmd()
+                assert result == "npm"
+
+
 class TestAddBinToPath:
     """Tests for _add_bin_to_path()."""
 

@@ -64,6 +64,21 @@ def _add_bin_to_path() -> None:
             logger.debug("[Keet] Added %s to PATH", bin_str)
 
 
+def _npm_cmd() -> str:
+    """Resolve the npm command with a full path.
+
+    Uses shutil.which() first, then checks common installation paths.
+    Falls back to bare 'npm' (will fail at runtime if not on PATH).
+    """
+    npm = shutil.which("npm")
+    if npm:
+        return npm
+    for p in ("/usr/local/bin/npm", "/usr/bin/npm", "/opt/homebrew/bin/npm"):
+        if pathlib.Path(p).is_file():
+            return p
+    return "npm"
+
+
 async def _ensure_node_deps() -> bool:
     """Install root-level npm dependencies (pear) if node_modules is missing.
 
@@ -74,9 +89,10 @@ async def _ensure_node_deps() -> bool:
     if node_modules.is_dir():
         return True
 
-    logger.info("[Keet] Installing Node.js dependencies (npm install)...")
+    npm = _npm_cmd()
+    logger.info("[Keet] Installing Node.js dependencies (%s install)...", npm)
     proc = await asyncio.create_subprocess_exec(
-        "npm", "install", "--ignore-scripts",
+        npm, "install", "--ignore-scripts",
         cwd=str(_PLUGIN_DIR),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -149,8 +165,9 @@ class KeetAdapter(BasePlatformAdapter):
         if os.path.isdir(node_modules):
             return True
         logger.info("[Keet] Installing bridge dependencies (npm install)...")
+        npm = _npm_cmd()
         proc = await asyncio.create_subprocess_exec(
-            "npm", "install", "--no-audit", "--no-fund",
+            npm, "install", "--no-audit", "--no-fund",
             cwd=self._bridge_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
