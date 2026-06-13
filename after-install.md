@@ -39,6 +39,5 @@ Share this public key with contacts who want to message this agent.
 
 | Issue | Solution |
 |-------|----------|
-| `pear: command not found` | Run `npm install` in plugin root, or `npm i -g pear` |
 | Bridge fails to start | Run `bash scripts/setup.sh` for guided setup |
 | Node.js not found | Install Node.js >= 18: https://nodejs.org/en/download/ |

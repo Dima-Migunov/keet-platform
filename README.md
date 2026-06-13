@@ -38,7 +38,7 @@ hermes gateway restart
 ```
 
 That's it. The plugin auto-detects the bridge path, installs Node.js dependencies
-on first start, and spawns the bridge as a subprocess. No manual setup needed.
+during `hermes plugins install`, and spawns the bridge as a subprocess. No manual setup needed.
 
 Optionally restrict access to specific contacts:
 ```bash
@@ -55,9 +55,9 @@ The plugin comes with an auto-install system that reduces friction for new users
    This means `npm install` in the plugin root installs Pear locally into
    `node_modules/.bin/pear`, so no global install is required.
 
-2. **On-first-connect auto-install** — `_ensure_node_deps()` in `adapter.py` checks
-   whether `node_modules/` exists. If missing, it runs `npm install --ignore-scripts`
-   automatically when the gateway starts the adapter.
+2. **Auto-install on plugin install** — `hermes plugins install` automatically runs
+   `npm install --no-audit --no-fund` if the plugin has a `package.json`.
+   This means dependencies are ready before the gateway even starts.
 
 3. **Smart Pear discovery** — `_pear_cmd()` searches for the `pear` binary in this order:
    1. System PATH (`shutil.which("pear")`)
