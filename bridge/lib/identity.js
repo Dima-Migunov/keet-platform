@@ -24,7 +24,7 @@ class IdentityManager {
     try {
       seed = fs.readFileSync(seedPath)
       this.mnemonic = await IdentityKey.deriveSeed(seed)
-      console.log('[identity] Loaded from:', seedPath)
+      console.error('[identity] Loaded from:', seedPath)
     } catch (err) {
       // Generate new identity
       this.mnemonic = IdentityKey.generateMnemonic()
@@ -35,13 +35,13 @@ class IdentityManager {
         fs.mkdirSync(this.storagePath, { recursive: true })
       } catch {}
       fs.writeFileSync(seedPath, seed)
-      console.log('[identity] Generated new identity')
+      console.error('[identity] Generated new identity')
     }
 
     this.identity = await IdentityKey.from({ mnemonic: this.mnemonic })
     this.keyPair = this.identity.identityKeyPair
 
-    console.log('[identity] Public key:', b4a.toString(this.publicKey, 'hex'))
+    console.error('[identity] Public key:', b4a.toString(this.publicKey, 'hex'))
     return this.identity
   }
 

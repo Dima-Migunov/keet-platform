@@ -202,15 +202,25 @@ class KeetAdapter(BasePlatformAdapter):
         return False
 
     def _bridge_node_cmd(self) -> list[str]:
-        """Build the Pear run command for the bridge.
+        """Build the Node.js command for the bridge.
 
-        Uses _pear_cmd() to resolve the pear binary — supports
-        global install, local node_modules, or fallback.
+        Uses 'node' to run index.js directly — no Pear Runtime dependency.
+        Falls back to 'pear run' if KEET_USE_PEAR env var is set.
         """
-        pear = _pear_cmd()
+        if os.environ.get("KEET_USE_PEAR", "").lower() == "true":
+            pear = _pear_cmd()
+            if not self._bridge_dir:
+                return pear + ["run", "index.js"]
+            return pear + ["run", os.path.join(self._bridge_dir, "index.js")]
+        # Default: run directly with Node.js
+        node = (
+            shutil.which("node")
+            or os.environ.get("KEET_NODE_PATH")
+            or "/usr/local/bin/node"
+        )
         if not self._bridge_dir:
-            return pear + ["run", "index.js"]
-        return pear + ["run", os.path.join(self._bridge_dir, "index.js")]
+            return [node, "index.js"]
+        return [node, os.path.join(self._bridge_dir, "index.js")]
 
     async def connect(self) -> bool:
         """Connect to the Keet Bridge daemon.
@@ -354,7 +364,7 @@ class KeetAdapter(BasePlatformAdapter):
             pubkey = event.get("public_key", "")
             self._bridge_public_key = pubkey
             logger.info("[Keet] Bridge identity: %s", pubkey)
-            self._bridge_ready.set()
+            # Don't set _bridge_ready yet — wait for welcome_room_ready
         elif event_type == "connect_result":
             logger.info("[Keet] Connected to peer: %s", event.get("pubkey", "?")[:16])
         elif event_type == "join_result":

@@ -76,13 +76,13 @@ class RoomManager {
 
     await this.core.ready()
     this._lastSeq = this.core.length
-    console.log('[room] Core ready, length:', this.core.length)
+    console.error('[room] Core ready, length:', this.core.length)
 
     // Join swarm topic = discoveryKey(topicKey) for room discovery
     const topic = crypto.discoveryKey(this.topicKey)
     const discovery = swarm.join(topic, { client: true, server: true })
     await discovery.flushed()
-    console.log('[room] Joined swarm topic:', b4a.toString(topic, 'hex'))
+    console.error('[room] Joined swarm topic:', b4a.toString(topic, 'hex'))
 
     // Listen for appended blocks (replicated from peers or our own writes)
     this.core.on('append', () => {
@@ -108,7 +108,7 @@ class RoomManager {
           }
         }
       } catch (err) {
-        console.log('[room] get block', i, 'not ready:', err.message)
+        console.error('[room] get block', i, 'not ready:', err.message)
       }
     }
 
@@ -117,7 +117,7 @@ class RoomManager {
 
   async append (msg) {
     if (!this.core.writable) {
-      console.log('[room] Core not writable, cannot append')
+      console.error('[room] Core not writable, cannot append')
       return null
     }
 
@@ -132,7 +132,7 @@ class RoomManager {
     })
 
     const seq = await this.core.append(buf.slice(0, state.start))
-    console.log('[room] Appended block', seq, 'to room', this.keyHex.slice(0, 16))
+    console.error('[room] Appended block', seq, 'to room', this.keyHex.slice(0, 16))
     this._lastSeq = seq + 1
     return seq
   }

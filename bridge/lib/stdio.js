@@ -24,10 +24,10 @@ class JsonStdio {
     })
 
     process.stdin.on('end', () => {
-      console.log('[stdio] Stdin closed')
+      console.error('[stdio] Stdin closed')
     })
 
-    console.log('[stdio] JSON stdio protocol ready')
+    console.error('[stdio] JSON stdio protocol ready')
   }
 
   send (event) {
@@ -100,7 +100,7 @@ class JsonStdio {
   async _cmdConnectToUser (pubkeyHex, roomKeyHex) {
     try {
       const pubkey = b4a.from(pubkeyHex, 'hex')
-      console.log('[stdio] Connecting to user:', pubkeyHex.slice(0, 16) + '...')
+      console.error('[stdio] Connecting to user:', pubkeyHex.slice(0, 16) + '...')
       await this.bridge.connectToPeer(pubkey, roomKeyHex ? b4a.from(roomKeyHex, 'hex') : null)
       this.send({ type: 'connect_result', pubkey: pubkeyHex, status: 'connected' })
     } catch (err) {
@@ -111,7 +111,7 @@ class JsonStdio {
   async _cmdSendWelcome (pubkeyHex) {
     try {
       const pubkey = b4a.from(pubkeyHex, 'hex')
-      console.log('[stdio] Sending welcome to:', pubkeyHex.slice(0, 16) + '...')
+      console.error('[stdio] Sending welcome to:', pubkeyHex.slice(0, 16) + '...')
 
       // Connect to peer using their pubkey as both peer and room key
       await this.bridge.connectToPeer(pubkey, pubkey)

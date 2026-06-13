@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const b4a = require('b4a')
+const path = require('path')
 const hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
 const Hyperswarm = require('hyperswarm')
@@ -9,17 +10,10 @@ const IdentityManager = require('./lib/identity')
 const RoomManager = require('./lib/room')
 const JsonStdio = require('./lib/stdio')
 
-// Pear Runtime is required — fail fast if missing
-if (typeof Pear === 'undefined') {
-  console.error('[bridge] Fatal: Pear Runtime is required.')
-  console.error('[bridge] Install: npm i -g pear')
-  console.error('[bridge] Then run: pear run pear://runtime')
-  process.exit(1)
-}
-
 process.title = 'keet-bridge'
 
-const STORAGE = Pear.config.storage
+// Storage directory: env var or default to ./data next to this script
+const STORAGE = process.env.KEET_STORAGE_DIR || path.join(__dirname, 'data')
 
 class KeetBridge {
   constructor () {
@@ -34,17 +28,22 @@ class KeetBridge {
   }
 
   async start () {
-    console.log('[bridge] Starting Keet Bridge...')
+    console.error('[bridge] Starting Keet Bridge...')
 
     this.identity = new IdentityManager(STORAGE)
     await this.identity.load()
-    console.log('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
+    console.error('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
 
-    this.dht = DHT.from(Pear.config)
+    // Create DHT using the identity key pair
+    this.dht = new DHT({
+      keyPair: this.identity.keyPair,
+    })
 
-    this.swarm = new Hyperswarm()
+    this.swarm = new Hyperswarm({
+      keyPair: this.identity.keyPair,
+    })
     this.swarm.on('connection', (conn, info) => {
-      console.log('[bridge] Swarm connection:', info.client ? 'outgoing' : 'incoming')
+      console.error('[bridge] Swarm connection:', info.client ? 'outgoing' : 'incoming')
       this._handleSwarmConnection(conn, info)
     })
 
@@ -55,6 +54,21 @@ class KeetBridge {
     await this._announce()
     await this._announceProfileDiscovery()
 
+    // Announce bridge identity via stdio
+    const pubkeyHex = b4a.toString(this.identity.publicKey, 'hex')
+    let profileKeyHex = ''
+    try {
+      const discoveryPair = this.identity.getDiscoveryKeyPair()
+      if (discoveryPair && discoveryPair.publicKey) {
+        profileKeyHex = b4a.toString(discoveryPair.publicKey, 'hex')
+      }
+    } catch (e) {}
+    this.stdio.send({
+      type: 'identity',
+      public_key: pubkeyHex,
+      profile_discovery_key: profileKeyHex
+    })
+
     // Create welcome room (keyed by own public key) so users can discover it
     const welcomeKey = this.identity.publicKey
     await this.createRoom(welcomeKey)
@@ -64,14 +78,14 @@ class KeetBridge {
     })
 
     this._listening = true
-    console.log('[bridge] Ready')
-    console.log('[bridge] Public key:', b4a.toString(this.identity.publicKey, 'hex'))
+    console.error('[bridge] Ready')
+    console.error('[bridge] Public key:', b4a.toString(this.identity.publicKey, 'hex'))
   }
 
   async _announce () {
     // Announce bridge identity key — direct DHT connections
     this.dhtServer = this.dht.createServer((conn) => {
-      console.log('[bridge] DHT connection (identity key)')
+      console.error('[bridge] DHT connection (identity key)')
       this._handleDhtConnection(conn, false)
     })
     await this.dhtServer.listen(this.identity.keyPair)
@@ -81,12 +95,12 @@ class KeetBridge {
     // Announce profile discovery key — Keet users can find us via contact search
     const discoveryPair = this.identity.getDiscoveryKeyPair()
     if (!discoveryPair || !discoveryPair.publicKey) {
-      console.log('[bridge] No profile discovery key available')
+      console.error('[bridge] No profile discovery key available')
       return
     }
-    console.log('[bridge] Profile discovery key:', b4a.toString(discoveryPair.publicKey, 'hex'))
+    console.error('[bridge] Profile discovery key:', b4a.toString(discoveryPair.publicKey, 'hex'))
     this.profileServer = this.dht.createServer((conn) => {
-      console.log('[bridge] DHT connection (profile discovery)')
+      console.error('[bridge] DHT connection (profile discovery)')
       this._handleDhtConnection(conn, true)
     })
     await this.profileServer.listen(discoveryPair)
@@ -139,11 +153,11 @@ class KeetBridge {
     // Connect to a peer by their DHT public key
     const pubkeyHex = b4a.toString(pubkey, 'hex')
     if (this._peerConnections.has(pubkeyHex)) {
-      console.log('[bridge] Already connected to peer:', pubkeyHex.slice(0, 16))
+      console.error('[bridge] Already connected to peer:', pubkeyHex.slice(0, 16))
       return
     }
 
-    console.log('[bridge] Connecting to peer:', pubkeyHex.slice(0, 16))
+    console.error('[bridge] Connecting to peer:', pubkeyHex.slice(0, 16))
     const conn = this.dht.connect(pubkey)
     this._peerConnections.set(pubkeyHex, conn)
 
@@ -205,7 +219,7 @@ class KeetBridge {
     const identityKey = this.identity.keyPair.publicKey
     const identityKeyPair = this.identity.keyPair
     this._pendingRooms.add(keyHex)
-    console.log('[bridge] Creating room:', keyHex.slice(0, 16))
+    console.error('[bridge] Creating room:', keyHex.slice(0, 16))
 
     // Core keyed by bridge identity (we can write), topic key = room key (for swarm discovery)
     const room = new RoomManager(identityKey, identityKeyPair, STORAGE, topicKey)
@@ -259,7 +273,7 @@ class KeetBridge {
       try { conn.destroy() } catch (e) {}
     }
     this._peerConnections.clear()
-    console.log('[bridge] Stopped')
+    console.error('[bridge] Stopped')
   }
 }
 
