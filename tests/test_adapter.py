@@ -2,7 +2,8 @@
 
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Allow importing adapter.py from the plugin root
 _plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -221,3 +222,118 @@ class TestWelcomeOnFirstContact:
                 await a._on_message(event)
 
         mock_on_msg.assert_awaited_once()
+
+
+class TestAdapterPublicAPI:
+    """Tests for public API methods: pubkey, welcome room, allowed users."""
+
+    def _make_adapter(self, **kwargs):
+        a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
+        a._bridge_public_key = kwargs.get("pubkey", "")
+        a._welcome_room_key = kwargs.get("welcome_key", "")
+        a._allowed_users = kwargs.get("allowed_users", None)
+        a._dynamic_allowed = kwargs.get("dynamic_allowed", set())
+        return a
+
+    def test_get_bridge_pubkey_returns_set_value(self):
+        a = self._make_adapter(pubkey="abc123")
+        assert a.get_bridge_pubkey() == "abc123"
+
+    def test_get_bridge_pubkey_returns_empty_when_unset(self):
+        a = self._make_adapter(pubkey="")
+        assert a.get_bridge_pubkey() == ""
+
+    def test_get_welcome_room_key_returns_set_value(self):
+        a = self._make_adapter(welcome_key="roomkey123")
+        assert a.get_welcome_room_key() == "roomkey123"
+
+    def test_get_welcome_room_key_returns_empty_when_unset(self):
+        a = self._make_adapter(welcome_key="")
+        assert a.get_welcome_room_key() == ""
+
+    def test_add_allowed_user_adds_new(self):
+        a = self._make_adapter(dynamic_allowed=set())
+        assert a.add_allowed_user("user123") is True
+        assert "user123" in a._dynamic_allowed
+
+    def test_add_allowed_user_duplicate_returns_false(self):
+        a = self._make_adapter(dynamic_allowed={"user123"})
+        assert a.add_allowed_user("user123") is False
+
+    def test_get_allowed_users_from_env_only(self):
+        a = self._make_adapter(allowed_users={"alice", "bob"}, dynamic_allowed=set())
+        users = a.get_allowed_users()
+        assert users == ["alice", "bob"]
+
+    def test_get_allowed_users_from_dynamic_only(self):
+        a = self._make_adapter(allowed_users=None, dynamic_allowed={"carol"})
+        users = a.get_allowed_users()
+        assert users == ["carol"]
+
+    def test_get_allowed_users_combined(self):
+        a = self._make_adapter(
+            allowed_users={"alice", "bob"},
+            dynamic_allowed={"carol"},
+        )
+        users = a.get_allowed_users()
+        assert users == ["alice", "bob", "carol"]
+
+    def test_get_allowed_users_deduplicates(self):
+        a = self._make_adapter(
+            allowed_users={"alice"},
+            dynamic_allowed={"alice", "bob"},
+        )
+        users = a.get_allowed_users()
+        assert users == ["alice", "bob"]
+
+
+class TestSelfMessageFilteringSync:
+    """Tests that the adapter ignores messages from itself."""
+
+    def _make_adapter(self, pubkey="bridge_pubkey_123"):
+        a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
+        a._bridge_public_key = pubkey
+        a._dynamic_allowed = set()
+        a._allowed_users = None
+        a._welcomed_contacts = set()
+        a._connected = True
+        a._process = MagicMock()
+        a.logger = adapter.logger
+        a.on_message = AsyncMock()
+        a.send = AsyncMock()
+        return a
+
+    def test_self_message_is_filtered(self):
+        a = self._make_adapter()
+        event = {
+            "chat_id": "room123",
+            "from": "bridge_pubkey_123",
+            "text": "hello from me",
+            "ts": 1000,
+        }
+        asyncio.run(a._on_message(event))
+        a.on_message.assert_not_called()
+
+    def test_other_message_is_not_filtered(self):
+        a = self._make_adapter()
+        a._dynamic_allowed = {"other_user"}
+        event = {
+            "chat_id": "room456",
+            "from": "other_user",
+            "text": "hi",
+            "ts": 2000,
+        }
+        asyncio.run(a._on_message(event))
+        a.on_message.assert_called_once()
+
+    def test_self_message_different_pubkey_not_filtered(self):
+        a = self._make_adapter(pubkey="bridge_pubkey_123")
+        a._allowed_users = {"other_bridge"}
+        event = {
+            "chat_id": "room789",
+            "from": "other_bridge",
+            "text": "not me",
+            "ts": 3000,
+        }
+        asyncio.run(a._on_message(event))
+        a.on_message.assert_called_once()

@@ -130,6 +130,8 @@ class KeetAdapter(BasePlatformAdapter):
         self._allowed_users = self._parse_allowed()
         self._home_channel = os.environ.get(HOME_CHANNEL_ENV, "").strip()
         self._bridge_public_key = ""
+        self._welcome_room_key = ""
+        self._dynamic_allowed: set[str] = set()
         self._welcomed_contacts: set = set()
 
     def _detect_bridge_dir(self) -> Optional[str]:
@@ -172,9 +174,13 @@ class KeetAdapter(BasePlatformAdapter):
     def _is_allowed(self, user_key: str) -> bool:
         if self._allow_all():
             return True
-        if self._allowed_users is None:
+        # Check .env list
+        if self._allowed_users is not None and user_key in self._allowed_users:
             return True
-        return user_key in self._allowed_users
+        # Check dynamic list
+        if self._dynamic_allowed and user_key in self._dynamic_allowed:
+            return True
+        return False
 
     def _bridge_node_cmd(self) -> list[str]:
         """Build the Pear run command for the bridge.
@@ -285,6 +291,13 @@ class KeetAdapter(BasePlatformAdapter):
             logger.info("[Keet] Connected to peer: %s", event.get("pubkey", "?")[:16])
         elif event_type == "join_result":
             logger.info("[Keet] Joined room: %s", event.get("room_key", "?")[:16])
+        elif event_type == "send_welcome_result":
+            logger.info("[Keet] Welcome sent to %s: %s",
+                        event.get("pubkey", "?")[:16], event.get("status", "?"))
+        elif event_type == "welcome_room_ready":
+            room_key = event.get("room_key", "")
+            self._welcome_room_key = room_key
+            logger.info("[Keet] Welcome room ready: %s", room_key[:16] if room_key else "?")
 
     async def _on_message(self, event: dict):
         """Handle an incoming message from Keet."""
@@ -294,7 +307,12 @@ class KeetAdapter(BasePlatformAdapter):
         ts = event.get("ts", 0)
 
         if not self._is_allowed(sender):
-            logger.info("[Keet] Ignoring %s (unauthorized)", sender)
+            logger.info("[Keet] Ignoring %s (unauthorized)", sender[:16])
+            return
+
+        # Ignore messages from self (loop prevention)
+        if sender and sender == self._bridge_public_key:
+            logger.debug("[Keet] Ignoring self-message from %s", sender[:16])
             return
 
         # Send welcome on first message from a new contact
@@ -372,6 +390,41 @@ class KeetAdapter(BasePlatformAdapter):
         line = json.dumps(cmd) + "\n"
         self._process.stdin.write(line.encode("utf-8"))
         await self._process.stdin.drain()
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    def get_bridge_pubkey(self) -> str:
+        """Return the bridge's full public key for contact discovery."""
+        return self._bridge_public_key
+
+    def get_welcome_room_key(self) -> str:
+        """Return the welcome room key."""
+        return self._welcome_room_key
+
+    def add_allowed_user(self, pubkey: str) -> bool:
+        """Add a pubkey to the in-memory allowed list.
+
+        Does NOT persist to .env — only lasts while the adapter is running.
+        Returns True if added, False if already present.
+        """
+        if pubkey in self._dynamic_allowed:
+            return False
+        self._dynamic_allowed.add(pubkey)
+        logger.info("[Keet] Added dynamic allowed user: %s", pubkey[:16])
+        return True
+
+    def get_allowed_users(self) -> list[str]:
+        """Return all allowed users from .env and dynamic list combined."""
+        users: set[str] = set()
+        if self._allowed_users:
+            users.update(self._allowed_users)
+        users.update(self._dynamic_allowed)
+        return sorted(users)
+
+    async def send_welcome(self, pubkey: str) -> bool:
+        """Send a welcome message to a user by their public key."""
+        await self._send_command({"command": "send_welcome", "pubkey": pubkey})
+        return True
 
     async def get_identity(self) -> dict:
         """Request bridge identity info."""

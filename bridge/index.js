@@ -55,6 +55,14 @@ class KeetBridge {
     await this._announce()
     await this._announceProfileDiscovery()
 
+    // Create welcome room (keyed by own public key) so users can discover it
+    const welcomeKey = this.identity.publicKey
+    await this.createRoom(welcomeKey)
+    this.stdio.send({
+      type: 'welcome_room_ready',
+      room_key: b4a.toString(welcomeKey, 'hex')
+    })
+
     this._listening = true
     console.log('[bridge] Ready')
     console.log('[bridge] Public key:', b4a.toString(this.identity.publicKey, 'hex'))

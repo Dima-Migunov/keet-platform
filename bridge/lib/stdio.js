@@ -60,6 +60,9 @@ class JsonStdio {
       case 'connect_to_user':
         this._cmdConnectToUser(params.pubkey, params.room_key)
         break
+      case 'send_welcome':
+        this._cmdSendWelcome(params.pubkey)
+        break
       case 'ping':
         this.send({ type: 'pong' })
         break
@@ -102,6 +105,34 @@ class JsonStdio {
       this.send({ type: 'connect_result', pubkey: pubkeyHex, status: 'connected' })
     } catch (err) {
       this.send({ type: 'error', command: 'connect_to_user', message: err.message })
+    }
+  }
+
+  async _cmdSendWelcome (pubkeyHex) {
+    try {
+      const pubkey = b4a.from(pubkeyHex, 'hex')
+      console.log('[stdio] Sending welcome to:', pubkeyHex.slice(0, 16) + '...')
+
+      // Connect to peer using their pubkey as both peer and room key
+      await this.bridge.connectToPeer(pubkey, pubkey)
+
+      // Create/get the room keyed by the user's pubkey
+      let room = this.bridge.rooms.get(pubkeyHex)
+      if (!room) {
+        room = await this.bridge.createRoom(pubkey)
+      }
+
+      // Append welcome message
+      const seq = await room.append({
+        type: 0,
+        content: 'Hello! You are now connected to the Keet bot.',
+        sender: this.bridge.identity.publicKey,
+        timestamp: Date.now()
+      })
+
+      this.send({ type: 'send_welcome_result', pubkey: pubkeyHex, status: 'ok' })
+    } catch (err) {
+      this.send({ type: 'error', command: 'send_welcome', message: err.message })
     }
   }
 
