@@ -2,7 +2,7 @@
 
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 # Allow importing adapter.py from the plugin root
 _plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -10,6 +10,11 @@ if _plugin_root not in sys.path:
     sys.path.insert(0, _plugin_root)
 
 import adapter
+
+# Mock SessionSource and MessageEvent so tests that reach message forwarding don't crash
+from unittest.mock import MagicMock
+adapter.SessionSource = MagicMock()
+adapter.MessageEvent = MagicMock()
 
 
 def test_check_requirements_pear_found():
@@ -150,3 +155,69 @@ class TestAddBinToPath:
             with patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
                 adapter._add_bin_to_path()
                 assert os.environ["PATH"] == "/usr/bin"
+
+
+class TestWelcomeOnFirstContact:
+    """Tests for welcome message on first contact."""
+
+    async def _make_adapter(self, allowed: str = "") -> adapter.KeetAdapter:
+        """Helper to create a KeetAdapter with patched dependencies."""
+        a = adapter.KeetAdapter.__new__(adapter.KeetAdapter)
+        a._bridge_dir = None
+        a._process = None
+        a._connected = False
+        a._tasks = set()
+        a._buffer = ""
+        a._home_channel = ""
+        a._bridge_public_key = ""
+        a._welcomed_contacts = set()
+        if allowed:
+            a._allowed_users = {k.strip() for k in allowed.split(",") if k.strip()}
+        else:
+            a._allowed_users = None  # allow all
+        # on_message is defined on the parent — set a noop for standalone tests
+        a.on_message = AsyncMock()
+        return a
+
+    async def test_first_message_sends_welcome(self):
+        """First message from an allowed user triggers welcome."""
+        a = await self._make_adapter()
+        event = {"chat_id": "room1", "from": "user_pubkey", "text": "hello", "ts": 100}
+
+        with patch.object(a, "send") as mock_send:
+            await a._on_message(event)
+
+        mock_send.assert_awaited_once_with("room1", adapter.WELCOME_MESSAGE)
+
+    async def test_welcome_sent_once_per_user(self):
+        """Subsequent messages from the same user don't send welcome again."""
+        a = await self._make_adapter()
+        event = {"chat_id": "room1", "from": "user_pubkey", "text": "hello", "ts": 100}
+
+        with patch.object(a, "send") as mock_send:
+            await a._on_message(event)  # first — sends welcome
+            await a._on_message(event)  # second — no welcome
+
+        assert mock_send.await_count == 1
+        mock_send.assert_awaited_with("room1", adapter.WELCOME_MESSAGE)
+
+    async def test_welcome_not_sent_to_unauthorized(self):
+        """Unauthorized contacts don't get a welcome."""
+        a = await self._make_adapter(allowed="other_user")
+        event = {"chat_id": "room1", "from": "unauthorized", "text": "hi", "ts": 100}
+
+        with patch.object(a, "send") as mock_send:
+            await a._on_message(event)
+
+        mock_send.assert_not_awaited()
+
+    async def test_welcome_does_not_block_message_forwarding(self):
+        """The message is still forwarded to on_message after welcome."""
+        a = await self._make_adapter()
+        event = {"chat_id": "room1", "from": "user_pk", "text": "hello", "ts": 100}
+
+        with patch.object(a, "send"):
+            with patch.object(a, "on_message") as mock_on_msg:
+                await a._on_message(event)
+
+        mock_on_msg.assert_awaited_once()

@@ -39,6 +39,12 @@ HOME_CHANNEL_ENV = "KEET_HOME_CHANNEL"
 ALLOWED_USERS_ENV = "KEET_ALLOWED_USERS"
 ALLOW_ALL_ENV = "KEET_ALLOW_ALL_USERS"
 
+# Welcome message sent to new contacts on first message
+WELCOME_MESSAGE = (
+    "Hello! You're now connected to the Hermes AI assistant. "
+    "Feel free to ask me anything — I'm here to help."
+)
+
 # Plugin root directory — used for node_modules/.bin discovery
 _PLUGIN_DIR = pathlib.Path(__file__).resolve().parent
 
@@ -124,6 +130,7 @@ class KeetAdapter(BasePlatformAdapter):
         self._allowed_users = self._parse_allowed()
         self._home_channel = os.environ.get(HOME_CHANNEL_ENV, "").strip()
         self._bridge_public_key = ""
+        self._welcomed_contacts: set = set()
 
     def _detect_bridge_dir(self) -> Optional[str]:
         """Locate the bridge directory relative to the plugin."""
@@ -289,6 +296,12 @@ class KeetAdapter(BasePlatformAdapter):
         if not self._is_allowed(sender):
             logger.info("[Keet] Ignoring %s (unauthorized)", sender)
             return
+
+        # Send welcome on first message from a new contact
+        if sender not in self._welcomed_contacts:
+            self._welcomed_contacts.add(sender)
+            logger.info("[Keet] First contact from %s — sending welcome", sender[:16])
+            await self.send(chat_id, WELCOME_MESSAGE)
 
         source = SessionSource(
             platform=PLATFORM,
