@@ -91,24 +91,22 @@ class JsonStdio {
     try {
       const dht = this.bridge.dht
       let host = null, port = null
-      // hyperdht v6 returns Buffer for address(); convert to string
-      if (dht && typeof dht.address === 'function') {
-        const addr = dht.address()
-        if (addr && Buffer.isBuffer(addr) && addr.length >= 6) {
-          // first 4 bytes = IP (little-endian), last 2 bytes = port
-          const ip = addr.readUInt32LE(0)
-          host = [
-            (ip >>> 24) & 255,
-            (ip >>> 16) & 255,
-            (ip >>> 8) & 255,
-            ip & 255
-          ].join('.')
-          port = addr.readUInt16BE(4)
-        } else if (typeof addr === 'string') {
-          const parts = addr.split(':')
-          host = parts[0]
-          port = parseInt(parts[1], 10) || null
-        }
+      // Retrieve the listening address from the DHT server (identity or profile)
+      const addr = this.bridge.getActiveAddress()
+      if (addr && Buffer.isBuffer(addr) && addr.length >= 6) {
+        // first 4 bytes = IP (little-endian), last 2 bytes = port (big‑endian as per hyperdht)
+        const ip = addr.readUInt32LE(0)
+        host = [
+          (ip >>> 24) & 255,
+          (ip >>> 16) & 255,
+          (ip >>> 8) & 255,
+          ip & 255
+        ].join('.')
+        port = addr.readUInt16BE(4)
+      } else if (addr && typeof addr === 'string') {
+        const parts = addr.split(':')
+        host = parts[0]
+        port = parseInt(parts[1], 10) || null
       }
       const peerCount = dht && dht.peers ? dht.peers.size : (dht && dht._connections ? dht._connections.size : 0)
       let dhtVersion = null

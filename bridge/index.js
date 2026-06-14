@@ -17,6 +17,20 @@ process.title = 'keet-bridge'
 const STORAGE = process.env.KEET_STORAGE_DIR || path.join(__dirname, 'data')
 
 class KeetBridge {
+  // Return the listening address (Buffer or string) from the active DHT server.
+  // Preference: identity server (`dhtServer`) → profile server (`profileServer`).
+  // If no server is listening yet, returns null.
+  getActiveAddress () {
+    const srv = this.dhtServer || this.profileServer
+    if (srv && typeof srv.address === 'function') {
+      try {
+        const a = srv.address()
+        // May be Buffer (6-byte) or a string "host:port"
+        return a
+      } catch (e) { /* ignore */ }
+    }
+    return null
+  }
   constructor () {
     this.identity = null
     this.swarm = null
@@ -282,11 +296,14 @@ class KeetBridge {
   }
 }
 
-const bridge = new KeetBridge()
-bridge.start().catch((err) => {
-  console.error('[bridge] Fatal:', err)
-  process.exit(1)
-})
+if (require.main === module) {
+  const bridge = new KeetBridge()
+  bridge.start().catch((err) => {
+    console.error('[bridge] Fatal:', err)
+    process.exit(1)
+  })
+}
+module.exports = KeetBridge
 
 process.on('SIGINT', () => bridge.stop().then(() => process.exit(0)))
 process.on('SIGTERM', () => bridge.stop().then(() => process.exit(0)))
