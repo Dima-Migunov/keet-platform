@@ -13,7 +13,7 @@ class PairingManager {
     this.bridge = bridge
     this.sessions = new Map()     // ticket hex → InviteSession
     this.pending = new Map()      // candidateId → { req, noiseSocket, ticket }
-    this._servers = new Map()     // discoveryKey hex → dht server (reused per room)
+    this._servers = new Map()     // ticket hex → dht server (one per invite)
   }
 
   /**
@@ -52,10 +52,11 @@ class PairingManager {
       status: 'active'
     })
 
-    // Start DHT listener for this discoveryKey (only once per room)
-    if (!this._servers.has(dkHex)) {
-      this._startServer(invite.discoveryKey, dkHex)
-    }
+    // Start a DHT server listening on the seed-derived keyPair so the
+    // Keet app (which derives the same key from the invite seed) can
+    // connect and send the pairing request.
+    const inviteKP = crypto.keyPair(invite.seed)
+    this._startServer(inviteKP, ticket)
 
     return { url, ticket, roomKey: b4a.toString(topicKey, 'hex') }
   }
@@ -63,46 +64,55 @@ class PairingManager {
   /**
    * Start listening on the DHT for incoming candidate connections.
    *
-   * In HyperDHT v6 the server is automatically bound to the DHT node –
-   * we need to listen on a unique ephemeral keypair so we don't conflict
-   * with the bridge's own identity or profile servers.
+   * Listens on the invite's seed-derived keyPair so the Keet app
+   * (which derives the same key from the invite seed) can find us
+   * on the DHT and send the pairing request.
    */
-  _startServer(discoveryKey, dkHex) {
-    const keyPair = require('hypercore-crypto').keyPair()
+  _startServer(keyPair, ticket) {
     const server = this.dht.createServer()
     server.on('connection', noiseSocket => {
       noiseSocket.on('data', rawBuf => {
-        this._handleIncoming(rawBuf, noiseSocket)
+        this._handleIncoming(rawBuf, noiseSocket, ticket)
       })
       noiseSocket.on('error', () => {})
     })
     server.listen(keyPair).catch(err => {
       console.error('[pairing] listen error:', err.message)
     })
-    this._servers.set(dkHex, server)
+    this._servers.set(ticket, server)
   }
 
   /**
    * Handle incoming candidate data on the DHT noise pipe.
-   * Try each active session that matches this discoveryKey.
    */
-  async _handleIncoming(rawBuf, noiseSocket) {
-    // Find which session this request belongs to by trying each
-    for (const [ticket, session] of this.sessions) {
-      if (session.status !== 'active') continue
+  async _handleIncoming(rawBuf, noiseSocket, ticket) {
+    const session = this.sessions.get(ticket)
+    if (!session || session.status !== 'active') return
+
+    // Check expiry
+    if (session.expires && Date.now() > session.expires) {
+      console.error('[pairing] Expired invite (%s), denying', ticket.slice(0, 16))
+      session.status = 'expired'
+      // Send INVITE_EXPIRED (status: 3)
       try {
         const req = MemberRequest.from(rawBuf)
-        const userData = req.open(session.invite.publicKey)
-        // If open() succeeded, this session matches
-        const candidateId = b4a.toString(req.id, 'hex')
-        this.pending.set(candidateId, { req, noiseSocket, ticket })
+        req.deny({ status: 3 })
+        if (req.response) noiseSocket.write(req.response)
+      } catch {}
+      noiseSocket.end()
+      return
+    }
 
-        // Auto-accept by default
-        await this._autoAccept(candidateId, session, req, noiseSocket)
-        return
-      } catch {
-        // Not this session's invite, try next
-      }
+    try {
+      const req = MemberRequest.from(rawBuf)
+      const userData = req.open(session.invite.publicKey)
+      const candidateId = b4a.toString(req.id, 'hex')
+      this.pending.set(candidateId, { req, noiseSocket, ticket })
+
+      // Auto-accept by default
+      await this._autoAccept(candidateId, session, req, noiseSocket)
+    } catch (e) {
+      console.error('[pairing] Rejected for ticket %s: %s', ticket.slice(0, 16), e.message)
     }
   }
 
@@ -183,6 +193,12 @@ class PairingManager {
     const session = this.sessions.get(ticket)
     if (!session) return false
     session.status = 'cancelled'
+    // Close this invite's DHT server
+    const server = this._servers.get(ticket)
+    if (server) {
+      try { server.close() } catch {}
+      this._servers.delete(ticket)
+    }
     return true
   }
 
