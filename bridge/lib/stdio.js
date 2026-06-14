@@ -78,24 +78,41 @@ class JsonStdio {
       case 'cancel_invite':
         this._cmdCancelInvite(params.ticket)
         break
-      case 'ping':
-        this.send({ type: 'pong' })
+      case 'status':
+        this._cmdStatus()
         break
+
       default:
         this.send({ type: 'error', command, message: 'unknown_command' })
     }
   }
 
-  _cmdGetIdentity () {
-    if (!this.bridge.identity) {
-      this.send({ type: 'error', command: 'get_identity', message: 'not_ready' })
-      return
+  _cmdStatus () {
+    try {
+      const dht = this.bridge.dht
+      const addr = dht && typeof dht.address === 'function' ? dht.address() : null
+      let host = null, port = null
+      if (addr) {
+        const parts = addr.split(':')
+        host = parts[0]
+        port = parseInt(parts[1], 10) || null
+      }
+      const peerCount = dht && dht.peers ? dht.peers.size : (dht && dht._connections ? dht._connections.size : 0)
+      let dhtVersion = null
+      try { dhtVersion = require('hyperdht/package.json').version } catch (e) {}
+      const publicKey = this.bridge.identity ? b4a.toString(this.bridge.identity.publicKey, 'hex') : null
+      this.send({
+        type: 'status',
+        status: 'online',
+        dhtVersion,
+        peerCount,
+        host,
+        port,
+        publicKey
+      })
+    } catch (err) {
+      this.send({ type: 'error', command: 'status', message: err.message })
     }
-    this.send({
-      type: 'identity',
-      public_key: b4a.toString(this.bridge.identity.publicKey, 'hex'),
-      profile_discovery_key: b4a.toString(this.bridge.identity.identity.profileDiscoveryPublicKey, 'hex')
-    })
   }
 
   async _cmdJoinRoom (roomKeyHex) {
