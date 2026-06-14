@@ -3,6 +3,7 @@
 import os
 import sys
 import asyncio
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Allow importing adapter.py from the plugin root
@@ -18,31 +19,64 @@ adapter.SessionSource = MagicMock()
 adapter.MessageEvent = MagicMock()
 
 
-def test_check_requirements_pear_found():
-    """check_requirements returns True when pear is on PATH."""
-    with patch("shutil.which", return_value="/usr/local/bin/pear"):
+def test_check_requirements_node_found():
+    """check_requirements returns True when node is available."""
+    with patch("os.path.exists", return_value=True), \
+         patch("os.access", return_value=True):
         assert adapter.check_requirements() is True
 
 
-def test_check_requirements_pear_missing():
-    """check_requirements returns False when pear is not found."""
-    with patch("shutil.which", return_value=None):
+def test_check_requirements_node_missing():
+    """check_requirements returns False when node is not found."""
+    with patch("os.path.exists", return_value=False):
         assert adapter.check_requirements() is False
 
 
-def test_check_requirements_pear_local():
-    """check_requirements returns True when pear is in local node_modules/.bin."""
-    with patch("shutil.which", return_value=None):
-        with patch("pathlib.Path.is_file", return_value=True):
-            assert adapter.check_requirements() is True
+def test_check_requirements_node_not_executable():
+    """check_requirements returns False when node exists but is not executable."""
+    with patch("os.path.exists", return_value=True), \
+         patch("os.access", return_value=False):
+        assert adapter.check_requirements() is False
 
 
-def test_check_requirements_calls_pear_path_check():
-    """When pear is found on system PATH, _check_pear_path is called."""
-    with patch("shutil.which", return_value="/usr/local/bin/pear"):
-        with patch.object(adapter, "_check_pear_path") as mock:
-            adapter.check_requirements()
-            mock.assert_called_once()
+def test_check_requirements_pear_optional_not_checked_by_default():
+    """check_requirements does NOT check for pear when KEET_USE_PEAR is not set."""
+    with patch("os.path.exists", return_value=True), \
+         patch("os.access", return_value=True), \
+         patch.object(adapter, "_check_pear_path") as mock:
+        assert adapter.check_requirements() is True
+        mock.assert_not_called()
+
+
+def test_check_requirements_pear_checked_when_env_set():
+    """check_requirements checks pear when KEET_USE_PEAR=true."""
+    with patch("os.path.exists", return_value=True), \
+         patch("os.access", return_value=True), \
+         patch.dict(os.environ, {"KEET_USE_PEAR": "true"}), \
+         patch("shutil.which", return_value="/usr/local/bin/pear"), \
+         patch.object(adapter, "_check_pear_path") as mock:
+        assert adapter.check_requirements() is True
+        mock.assert_called_once()
+
+
+def test_check_requirements_pear_missing_when_env_set():
+    """check_requirements returns False when KEET_USE_PEAR=true but pear not found."""
+    with patch("os.path.exists", return_value=True), \
+         patch("os.access", return_value=True), \
+         patch.dict(os.environ, {"KEET_USE_PEAR": "true"}), \
+         patch("shutil.which", return_value=None), \
+         patch("pathlib.Path.is_file", return_value=False):
+        assert adapter.check_requirements() is False
+
+
+def test_check_requirements_pear_local_when_env_set():
+    """check_requirements returns True when KEET_USE_PEAR=true and pear in local node_modules."""
+    with patch("os.path.exists", return_value=True), \
+         patch("os.access", return_value=True), \
+         patch.dict(os.environ, {"KEET_USE_PEAR": "true"}), \
+         patch("shutil.which", return_value=None), \
+         patch("pathlib.Path.is_file", return_value=True):
+        assert adapter.check_requirements() is True
 
 
 def test_check_pear_path_does_not_log_when_dir_missing():
@@ -72,6 +106,55 @@ def test_check_pear_path_silent_when_in_path():
                 with patch("adapter.logger.warning") as mock:
                     adapter._check_pear_path()
                     mock.assert_not_called()
+
+
+def test_env_enablement_reads_vars():
+    """_env_enablement returns home_channel and allowed_users from env."""
+    with patch.dict(os.environ, {
+        "KEET_HOME_CHANNEL": "room_abc123",
+        "KEET_ALLOWED_USERS": "user1,user2",
+    }, clear=True):
+        result = adapter._env_enablement()
+        assert result["home_channel"] == "room_abc123"
+        assert result["allowed_users"] == "user1,user2"
+
+
+def test_env_enablement_no_vars():
+    """_env_enablement returns empty dict when no env vars are set."""
+    with patch.dict(os.environ, {}, clear=True):
+        result = adapter._env_enablement()
+        assert result == {}
+
+
+def test_env_enablement_handles_empty_strings():
+    """_env_enablement skips vars with empty values."""
+    with patch.dict(os.environ, {
+        "KEET_HOME_CHANNEL": "",
+        "KEET_ALLOWED_USERS": "user1",
+    }, clear=True):
+        result = adapter._env_enablement()
+        assert "home_channel" not in result
+        assert result["allowed_users"] == "user1"
+
+
+def test_is_connected_returns_false_when_node_missing():
+    """is_connected returns False when node is not on PATH."""
+    with patch("shutil.which", return_value=None):
+        assert adapter.is_connected(None) is False
+
+
+def test_is_connected_returns_false_when_bridge_node_modules_missing():
+    """is_connected returns False when bridge/node_modules does not exist."""
+    with patch("shutil.which", return_value="/usr/local/bin/node"), \
+         patch("pathlib.Path.is_dir", return_value=False):
+        assert adapter.is_connected(None) is False
+
+
+def test_is_connected_returns_true():
+    """is_connected returns True when node is available and bridge/node_modules exists."""
+    with patch("shutil.which", return_value="/usr/local/bin/node"), \
+         patch("pathlib.Path.is_dir", return_value=True):
+        assert adapter.is_connected(None) is True
 
 
 class TestBridgeNodeCmd:
@@ -202,6 +285,7 @@ class TestWelcomeOnFirstContact:
         a._welcomed_contacts = set()
         if allowed:
             a._allowed_users = {k.strip() for k in allowed.split(",") if k.strip()}
+            a._allow_all = lambda: False
         else:
             # Allow all — set up _is_allowed to always return True
             a._allowed_users = None
@@ -209,6 +293,7 @@ class TestWelcomeOnFirstContact:
         a.on_message = AsyncMock()
         return a
 
+    @pytest.mark.asyncio
     async def test_first_message_sends_welcome(self):
         """First message from an allowed user triggers welcome."""
         a = await self._make_adapter()
@@ -219,6 +304,7 @@ class TestWelcomeOnFirstContact:
 
         mock_send.assert_awaited_once_with("room1", adapter.WELCOME_MESSAGE)
 
+    @pytest.mark.asyncio
     async def test_welcome_sent_once_per_user(self):
         """Subsequent messages from the same user don't send welcome again."""
         a = await self._make_adapter()
@@ -231,6 +317,7 @@ class TestWelcomeOnFirstContact:
         assert mock_send.await_count == 1
         mock_send.assert_awaited_with("room1", adapter.WELCOME_MESSAGE)
 
+    @pytest.mark.asyncio
     async def test_welcome_not_sent_to_unauthorized(self):
         """Unauthorized contacts don't get a welcome."""
         a = await self._make_adapter(allowed="other_user")
@@ -241,6 +328,7 @@ class TestWelcomeOnFirstContact:
 
         mock_send.assert_not_awaited()
 
+    @pytest.mark.asyncio
     async def test_welcome_does_not_block_message_forwarding(self):
         """The message is still forwarded to on_message after welcome."""
         a = await self._make_adapter()

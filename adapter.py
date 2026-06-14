@@ -82,15 +82,20 @@ def _npm_cmd() -> str:
 def _node_path_env() -> dict[str, str]:
     """Return env with PATH extended so node/npm are found in subprocesses.
 
-    The gateway may have a stripped PATH; ensure /usr/local/bin (where node
-    typically lives) is included so npm's '#!env node' shebang works.
+    The gateway may have a stripped PATH; ensure common Node.js locations
+    are included so npm's '#!env node' shebang works.
     """
     env = dict(os.environ)
     node_bin = os.path.dirname(
         shutil.which("node") or "/usr/local/bin/node"
     )
-    if node_bin not in env.get("PATH", ""):
-        env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
+    extra_bins = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin"]
+    path = env.get("PATH", "")
+    path_parts = [p for p in path.split(os.pathsep) if p]
+    for item in [node_bin] + extra_bins:
+        if item and item not in path_parts:
+            path_parts.append(item)
+    env["PATH"] = os.pathsep.join(path_parts)
     return env
 
 
@@ -638,10 +643,12 @@ def check_requirements() -> bool:
     The bridge runs directly via Node.js — Pear Runtime is no longer
     required unless KEET_USE_PEAR env is explicitly set.
     """
-    if not shutil.which("node"):
+    node = shutil.which("node") or "/usr/local/bin/node"
+    if not os.path.exists(node) or not os.access(node, os.X_OK):
         logger.error(
-            "[Keet] Node.js not found. Install Node.js >= 18: "
-            "https://nodejs.org/en/download/"
+            "[Keet] Node.js not found at %s. Install Node.js >= 18: "
+            "https://nodejs.org/en/download/",
+            node,
         )
         return False
 
@@ -655,10 +662,11 @@ def check_requirements() -> bool:
 
     # If KEET_USE_PEAR is set, also check for pear
     if os.environ.get("KEET_USE_PEAR", "").lower() == "true":
-        if shutil.which("pear"):
+        pear = shutil.which("pear")
+        local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
+        if pear:
             _check_pear_path()
             return True
-        local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
         if local_pear.is_file():
             return True
         logger.error(
@@ -701,20 +709,20 @@ def is_connected(config: "PlatformConfig") -> bool:
     return bridge_dir.is_dir()
 
 
-def _env_enablement(config: "PlatformConfig") -> dict:
+def _env_enablement() -> dict:
     """Load env vars from platform config section."""
     env = {}
     home = os.environ.get(HOME_CHANNEL_ENV, "")
     if not home:
-        home = (config.extra or {}).get("home_channel", "")
+        home = os.environ.get("KEET_HOME_CHANNEL", "")
     if home:
-        env[HOME_CHANNEL_ENV] = home
+        env["home_channel"] = home
 
     allowed = os.environ.get(ALLOWED_USERS_ENV, "")
     if not allowed:
-        allowed = (config.extra or {}).get("allowed_users", "")
+        allowed = os.environ.get("KEET_ALLOWED_USERS", "")
     if allowed:
-        env[ALLOWED_USERS_ENV] = allowed
+        env["allowed_users"] = allowed
 
     return env
 
@@ -767,8 +775,9 @@ def register(ctx) -> None:
         is_connected=is_connected,
         required_env=[],
         install_hint=(
-            "Requires Pear Runtime (npm i -g pear) and Node.js >= 20. "
-            "Bridge is auto-detected and auto-started — no manual config needed."
+            "Requires Node.js >= 18. "
+            "Bridge is auto-detected and auto-started — no manual config needed. "
+            "Pear Runtime (npm i -g pear) is optional; set KEET_USE_PEAR=true to use it."
         ),
         setup_fn=_setup_fn,
         env_enablement_fn=_env_enablement,

@@ -12,17 +12,14 @@ Hermes Agent ←→ Keet Bridge Daemon ←→ Keet P2P Network
 ## Requirements
 
 - **Hermes Agent** (any installation method)
-- **Pear Runtime** — via `npm i -g pear` (installed with Keet 4.16.3+)
-- **Node.js >= 18** — required by Pear Runtime
+- **Node.js >= 18** — required to run the Keet Bridge
 - Linux: `sudo apt install libatomic1` (for sodium-native)
 
-> Pear Runtime is already bundled with Keet Desktop. Only standalone installs need `npm i -g pear`.
+> **Pear Runtime** is optional. The bridge runs directly via Node.js by default.
+> Set `KEET_USE_PEAR=true` to use Pear Runtime instead.
 >
-> After installing Pear, finalize the setup:
-> ```bash
-> pear run pear://runtime
-> ```
-> This configures the PATH so Pear's own tools are found without warnings.
+> Keet Desktop 4.16.3+ bundles Pear Runtime automatically.
+> For standalone installs: `npm i -g pear && pear run pear://runtime`.
 
 ## Install
 
