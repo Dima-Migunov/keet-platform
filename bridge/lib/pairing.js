@@ -1,11 +1,35 @@
 const b4a = require('b4a')
 const crypto = require('hypercore-crypto')
+const c = require('compact-encoding')
 const blind = require('blind-pairing-core')
 const z32 = require('z32')
 
 const { CandidateRequest, MemberRequest, createInvite, decodeInvite } = blind
 
 const DEFAULT_TTL = 72 * 60 * 60 * 1000 // 72 hours
+
+/**
+ * Wrap a standard blind-pairing invite into the Keet-compatible format.
+ * Keet mobile app expects flags=97 (bits 0, 5, 6) and a 33-byte
+ * extension: c.uint(148) prefix + 32-byte encryption key.
+ */
+function wrapKeetInvite(invite, encKey) {
+  // invite.invite is the standard 66-byte Invite buffer (version+flags+seed+discoveryKey)
+  const base = invite.invite
+  // New buffer: 66 (base) + 33 (extension) = 99 bytes
+  const keetBuf = b4a.alloc(99)
+  b4a.copy(base, keetBuf, 0, 0, base.length)
+
+  // Set flags byte to 97 (bits 0, 5, 6 set)
+  // In compact-encoding, c.uint(97) = 0x61
+  keetBuf[1] = 97
+
+  // Append extension: c.uint(148) + fixed32(encKey) = 1 + 32 = 33 bytes
+  keetBuf[66] = 148
+  keetBuf.set(encKey, 67)
+
+  return { ...invite, invite: keetBuf }
+}
 
 class PairingManager {
   constructor(dht, bridge) {
@@ -33,12 +57,15 @@ class PairingManager {
     // The `key` here is the room topicKey; discoveryKey is derived from it.
     const invite = createInvite(topicKey, {
       discoveryKey: crypto.discoveryKey(topicKey),
-      expires,
       additionalNodes: opts.additionalNodes
     })
 
+    // Generate encryption key for the room and wrap invite into Keet format
+    const encKey = crypto.randomBytes(32)
+    const keetInvite = wrapKeetInvite(invite, encKey)
+
     const ticket = b4a.toString(invite.publicKey, 'hex')
-    const url = 'keet://chat/' + z32.encode(invite.invite)
+    const url = 'keet://chat/' + z32.encode(keetInvite.invite)
     const dkHex = b4a.toString(invite.discoveryKey, 'hex')
 
     // Store session
@@ -47,6 +74,7 @@ class PairingManager {
       invite,
       topicKey,
       roomKey: b4a.toString(topicKey, 'hex'),
+      encKey,                        // stored encryption key for confirm()
       createdAt: Date.now(),
       expires,
       status: 'active'
@@ -121,7 +149,7 @@ class PairingManager {
    */
   async _autoAccept(candidateId, session, req, noiseSocket) {
     const roomKey = session.topicKey
-    const encryptionKey = crypto.randomBytes(32)
+    const encryptionKey = session.encKey || crypto.randomBytes(32)
 
     req.confirm({ key: roomKey, encryptionKey, additional: null })
 
