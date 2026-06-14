@@ -83,13 +83,24 @@ def _node_path_env() -> dict[str, str]:
     """Return env with PATH extended so node/npm are found in subprocesses.
 
     The gateway may have a stripped PATH; ensure common Node.js locations
-    are included so npm's '#!env node' shebang works.
+    are included so npm's '#!env node' shebang works, and also include the
+    plugin's local node_modules/.bin directory (required for Pear and other
+    locally-installed binaries).
     """
     env = dict(os.environ)
+    # Path to the node executable
     node_bin = os.path.dirname(
         shutil.which("node") or "/usr/local/bin/node"
     )
-    extra_bins = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin"]
+    # Plugin's local bin dir (node_modules/.bin)
+    plugin_bin = str(_PLUGIN_DIR / "node_modules" / ".bin")
+    extra_bins = [
+        plugin_bin,
+        "/usr/local/sbin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/usr/bin",
+    ]
     path = env.get("PATH", "")
     path_parts = [p for p in path.split(os.pathsep) if p]
     for item in [node_bin] + extra_bins:
