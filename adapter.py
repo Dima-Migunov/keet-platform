@@ -425,6 +425,14 @@ class KeetAdapter(BasePlatformAdapter):
             logger.info("[Keet] Pairing list received: %d sessions, %d pending",
                         len(event.get("sessions", [])),
                         len(event.get("pending", [])))
+        elif event_type == "status":
+            logger.info("[Keet] Bridge status: online=%s, dhtVersion=%s, peerCount=%s, host=%s, port=%s, publicKey=%s",
+                        event.get("status"),
+                        event.get("dhtVersion"),
+                        event.get("peerCount"),
+                        event.get("host"),
+                        event.get("port"),
+                        event.get("publicKey", "")[:16] + "...")
 
     async def _on_message(self, event: dict):
         """Handle an incoming message from Keet."""
@@ -587,6 +595,11 @@ class KeetAdapter(BasePlatformAdapter):
     async def get_identity(self) -> dict:
         """Request bridge identity info."""
         await self._send_command({"command": "get_identity"})
+        return {}
+
+    async def get_status(self) -> dict:
+        """Request bridge status info (online, dhtVersion, peerCount, host, port, publicKey)."""
+        await self._send_command({"command": "status"})
         return {}
 
     async def join_room(self, room_key: str) -> None:

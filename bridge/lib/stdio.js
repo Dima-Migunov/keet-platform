@@ -90,12 +90,25 @@ class JsonStdio {
   _cmdStatus () {
     try {
       const dht = this.bridge.dht
-      const addr = dht && typeof dht.address === 'function' ? dht.address() : null
       let host = null, port = null
-      if (addr) {
-        const parts = addr.split(':')
-        host = parts[0]
-        port = parseInt(parts[1], 10) || null
+      // hyperdht v6 returns Buffer for address(); convert to string
+      if (dht && typeof dht.address === 'function') {
+        const addr = dht.address()
+        if (addr && Buffer.isBuffer(addr) && addr.length >= 6) {
+          // first 4 bytes = IP (little-endian), last 2 bytes = port
+          const ip = addr.readUInt32LE(0)
+          host = [
+            (ip >>> 24) & 255,
+            (ip >>> 16) & 255,
+            (ip >>> 8) & 255,
+            ip & 255
+          ].join('.')
+          port = addr.readUInt16BE(4)
+        } else if (typeof addr === 'string') {
+          const parts = addr.split(':')
+          host = parts[0]
+          port = parseInt(parts[1], 10) || null
+        }
       }
       const peerCount = dht && dht.peers ? dht.peers.size : (dht && dht._connections ? dht._connections.size : 0)
       let dhtVersion = null
@@ -113,6 +126,18 @@ class JsonStdio {
     } catch (err) {
       this.send({ type: 'error', command: 'status', message: err.message })
     }
+  }
+
+  _cmdGetIdentity () {
+    if (!this.bridge.identity) {
+      this.send({ type: 'error', command: 'get_identity', message: 'not_ready' })
+      return
+    }
+    this.send({
+      type: 'identity',
+      public_key: b4a.toString(this.bridge.identity.publicKey, 'hex'),
+      profile_discovery_key: b4a.toString(this.bridge.identity.identity.profileDiscoveryPublicKey, 'hex')
+    })
   }
 
   async _cmdJoinRoom (roomKeyHex) {
