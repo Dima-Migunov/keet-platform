@@ -100,14 +100,18 @@ class KeetBridge {
         nat._threshold = 29
         nat._top = 0
 
+        // Store values in closure to avoid recursion with dht.host getter
+        const fixedHost = host
+        const fixedPort = port
+
         // Make host and port non-writable so add() cannot change them
         Object.defineProperty(nat, 'host', {
-          get: () => host,
+          get: () => fixedHost,
           set: () => {},
           configurable: true
         })
         Object.defineProperty(nat, 'port', {
-          get: () => port,
+          get: () => fixedPort,
           set: () => {},
           configurable: true
         })
