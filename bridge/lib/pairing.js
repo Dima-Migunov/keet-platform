@@ -111,8 +111,10 @@ class PairingManager {
     // Start a DHT server listening on the seed-derived keyPair so the
     // Keet app (which derives the same key from the invite seed) can
     // connect and send the pairing request.
+    // Also announce the discoveryKey in the DHT so the app can find us
+    // via the standard Hyperswarm lookup flow.
     const inviteKP = crypto.keyPair(invite.seed)
-    this._startServer(inviteKP, ticket)
+    await this._startServer(inviteKP, ticket, invite.discoveryKey)
 
     return { url, ticket, roomKey: b4a.toString(topicKey, 'hex') }
   }
@@ -120,17 +122,23 @@ class PairingManager {
   /**
    * Start listening on the DHT for incoming candidate connections.
    *
-   * Listens on the invite's seed-derived keyPair so the Keet app
-   * (which derives the same key from the invite seed) can find us
-   * on the DHT and send the pairing request.
+   * Two things happen here:
+   * 1. Create a DHT server on the invite's seed-derived keyPair so we can
+   *    accept encrypted blind-pairing connections from the Keet app.
+   * 2. Announce the invite's discoveryKey in the DHT so the Keet app can
+   *    find us via DHT lookup (the standard Hyperswarm discovery mechanism).
+   *
+   * The Keet app decodes the invite to get the discoveryKey, does
+   * swarm.join(discoveryKey) which triggers a DHT lookup, finds our
+   * announce record, obtains our relayAddresses, and connects.
    */
-  _startServer(keyPair, ticket) {
+  async _startServer(keyPair, ticket, discoveryKey) {
     // Determine relay addresses for the invite DHT server.
-    // Without relayAddresses, the announce record contains no IP/port
-    // so remote clients cannot connect (findPeer succeeds but connect fails).
+    // These are published in the DHT announce record so remote clients
+    // know where to connect. With symmetric NAT the STUN-discovered port
+    // is the only externally reachable address.
     let relayAddresses = []
     try {
-      // Use STUN-discovered external address if available
       const extAddr = this.bridge._externalAddress
       if (extAddr && extAddr.host && extAddr.port) {
         relayAddresses.push({ host: extAddr.host, port: extAddr.port })
@@ -147,6 +155,9 @@ class PairingManager {
       console.error('[pairing] Could not determine relayAddress:', e.message)
     }
 
+    // Step 1: Create a DHT server on the invite keyPair.
+    // The Keet app derives the same keyPair from the invite seed,
+    // so it can establish a Noise-encrypted connection to us.
     const server = this.dht.createServer({ relayAddresses })
     server.on('connection', noiseSocket => {
       const remoteKey = noiseSocket.remotePublicKey
@@ -170,24 +181,29 @@ class PairingManager {
           ticket.slice(0, 16))
       })
     })
-    server.listen(keyPair).then(() => {
-      // Periodically refresh the announcer so the DHT record stays alive.
-      // Without this the announcement may expire when firewalled=true.
-      this._refreshIntervals = this._refreshIntervals || new Map()
-      const intervalId = setInterval(() => {
-        if (this._servers.has(ticket)) {
-          const s = this._servers.get(ticket)
-          if (s._announcer) {
-            s._announcer.refresh()
-            console.error('[pairing] Refreshed announce ticket=%s', ticket.slice(0, 16))
-          }
-        }
-      }, 25_000)
-      this._refreshIntervals.set(ticket, intervalId)
-    }).catch(err => {
-      console.error('[pairing] listen error ticket=%s: %s',
-        ticket.slice(0, 16), err.message)
-    })
+
+    await server.listen(keyPair)
+    console.error('[pairing] Server listening on invite keyPair for ticket=%s', ticket.slice(0, 16))
+
+    // Step 2: Announce the discoveryKey in the DHT.
+    // This is the key that the Keet app looks up when joining the invite.
+    // The announce record maps discoveryKey → inviteKeyPair.publicKey + relayAddresses,
+    // so the app can find and connect to us even behind symmetric NAT.
+    //
+    // We use dht.announce() which handles periodic refresh internally.
+    try {
+      const announceStream = this.dht.announce(discoveryKey, keyPair, relayAddresses)
+      server._announceStream = announceStream
+      console.error('[pairing] Announced discoveryKey for ticket=%s', ticket.slice(0, 16))
+
+      // Consume the stream (it runs indefinitely, refreshing the announce)
+      announceStream.finished().catch(e => {
+        console.error('[pairing] Announce stream ended ticket=%s: %s', ticket.slice(0, 16), e.message)
+      })
+    } catch (e) {
+      console.error('[pairing] Announce failed for ticket=%s: %s', ticket.slice(0, 16), e.message)
+    }
+
     this._servers.set(ticket, server)
   }
 
@@ -306,6 +322,10 @@ class PairingManager {
     const server = this._servers.get(ticket)
     if (server) {
       try { server.close() } catch {}
+      // Stop the announce stream
+      if (server._announceStream) {
+        try { server._announceStream.destroy() } catch {}
+      }
       this._servers.delete(ticket)
     }
     return true
@@ -326,6 +346,9 @@ class PairingManager {
   close() {
     for (const [, server] of this._servers) {
       try { server.close() } catch {}
+      if (server._announceStream) {
+        try { server._announceStream.destroy() } catch {}
+      }
     }
     this._servers.clear()
     this.sessions.clear()
