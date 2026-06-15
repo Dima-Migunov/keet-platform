@@ -53,11 +53,32 @@ class PairingManager {
       room = await this.bridge.createRoom(topicKey)
     }
 
+    // Derive the bridge's own DHT address for additionalNodes
+    // so the phone can find us without relying on DHT findPeer.
+    let additionalNodes = null
+    try {
+      const addr = this.bridge.dht.remoteAddress()
+      if (addr && addr.host && addr.port) {
+        additionalNodes = [{ host: addr.host, port: addr.port }]
+        console.error('[pairing] Including additionalNode: %s:%d', addr.host, addr.port)
+      } else {
+        // Fallback: use the actual socket address
+        const sockAddr = this.bridge.dht.io.serverSocket.address()
+        if (sockAddr && sockAddr.port) {
+          const host = this.bridge.dht.host || sockAddr.host
+          additionalNodes = [{ host, port: sockAddr.port }]
+          console.error('[pairing] Including additionalNode (fallback): %s:%d', host, sockAddr.port)
+        }
+      }
+    } catch (e) {
+      console.error('[pairing] Could not determine additionalNode:', e.message)
+    }
+
     // Create the blind-pairing invite.
     // The `key` here is the room topicKey; discoveryKey is derived from it.
     const invite = createInvite(topicKey, {
       discoveryKey: crypto.discoveryKey(topicKey),
-      additionalNodes: opts.additionalNodes
+      additionalNodes
     })
 
     // Generate encryption key for the room and wrap invite into Keet format
@@ -99,13 +120,44 @@ class PairingManager {
   _startServer(keyPair, ticket) {
     const server = this.dht.createServer()
     server.on('connection', noiseSocket => {
+      const remoteKey = noiseSocket.remotePublicKey
+        ? b4a.toString(noiseSocket.remotePublicKey, 'hex').slice(0, 16)
+        : 'unknown'
+      console.error('[pairing] INCOMING CONNECTION ticket=%s remote=%s',
+        ticket.slice(0, 16), remoteKey)
       noiseSocket.on('data', rawBuf => {
+        const len = rawBuf.length
+        const first = rawBuf[0]
+        console.error('[pairing] DATA ticket=%s len=%d first_byte=%d',
+          ticket.slice(0, 16), len, first)
         this._handleIncoming(rawBuf, noiseSocket, ticket)
       })
-      noiseSocket.on('error', () => {})
+      noiseSocket.on('error', (err) => {
+        console.error('[pairing] conn error ticket=%s: %s',
+          ticket.slice(0, 16), err.message)
+      })
+      noiseSocket.on('close', () => {
+        console.error('[pairing] conn CLOSED ticket=%s',
+          ticket.slice(0, 16))
+      })
     })
-    server.listen(keyPair).catch(err => {
-      console.error('[pairing] listen error:', err.message)
+    server.listen(keyPair).then(() => {
+      // Periodically refresh the announcer so the DHT record stays alive.
+      // Without this the announcement may expire when firewalled=true.
+      this._refreshIntervals = this._refreshIntervals || new Map()
+      const intervalId = setInterval(() => {
+        if (this._servers.has(ticket)) {
+          const s = this._servers.get(ticket)
+          if (s._announcer) {
+            s._announcer.refresh()
+            console.error('[pairing] Refreshed announce ticket=%s', ticket.slice(0, 16))
+          }
+        }
+      }, 25_000)
+      this._refreshIntervals.set(ticket, intervalId)
+    }).catch(err => {
+      console.error('[pairing] listen error ticket=%s: %s',
+        ticket.slice(0, 16), err.message)
     })
     this._servers.set(ticket, server)
   }

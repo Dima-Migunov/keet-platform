@@ -347,6 +347,9 @@ class KeetAdapter(BasePlatformAdapter):
 
     async def _read_bridge_stderr(self):
         """Log and capture bridge stderr for startup diagnostics."""
+        import re
+        # Regex for ANSI escape sequences
+        _ansi_re = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
         while self._process and self._process.stderr:
             try:
                 line = await self._process.stderr.readline()
@@ -354,8 +357,9 @@ class KeetAdapter(BasePlatformAdapter):
                     break
                 text = line.decode("utf-8", errors="replace").strip()
                 if text:
+                    text = _ansi_re.sub('', text)
                     self._startup_stderr.append(text)
-                    logger.debug("[Keet] Bridge: %s", text)
+                    logger.info("[Keet] Bridge: %s", text)
             except Exception:
                 break
 

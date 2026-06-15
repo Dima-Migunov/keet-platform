@@ -53,10 +53,39 @@ class KeetBridge {
     await this.identity.load()
     console.error('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
 
-    // Create DHT using the identity key pair
+    // Use a fixed DHT port so remoteAddress() can resolve correctly.
+    // Port 49737 is typically taken by the gateway manager's DHT.
+    const DHT_PORT = 60001
+
+    // Create DHT using the identity key pair with an explicit port.
     this.dht = new DHT({
       keyPair: this.identity.keyPair,
+      port: DHT_PORT,
     })
+
+    // Wait for DHT to fully bootstrap (socket bound, peers discovered).
+    // Then feed the NatSampler so remoteAddress() returns a valid
+    // {host, port} pair.  Without this dht.port stays 0 and the
+    // announcer never adds relay addresses, so the invite-keypair
+    // announcement expires immediately after creation.
+    await this.dht.ready()
+    try {
+      const sockAddr = this.dht.io.serverSocket.address()
+      if (sockAddr && sockAddr.port) {
+        const host = this.dht.host || sockAddr.host
+        const port = sockAddr.port
+        // Force the NatSampler to adopt our address (bypass consensus).
+        // Symmetric NAT means DHT peers see us on varying source ports,
+        // so the sampler cannot agree on a consistent port on its own.
+        this.dht._nat.host = host
+        this.dht._nat.port = port
+        // Also feed 5 consistent samples so internal logic doesn't revert
+        for (let i = 0; i < 5; i++) this.dht._nat.add(host, port)
+        console.error('[bridge] DHT nat set: %s:%d', host, port)
+      }
+    } catch (e) {
+      console.error('[bridge] DHT nat setup failed:', e.message)
+    }
 
     // Blind-pairing for invite links
     this.pairing = new PairingManager(this.dht, this)
@@ -299,8 +328,9 @@ class KeetBridge {
   }
 }
 
+let bridge = null
 if (require.main === module) {
-  const bridge = new KeetBridge()
+  bridge = new KeetBridge()
   bridge.start().catch((err) => {
     console.error('[bridge] Fatal:', err)
     process.exit(1)
@@ -308,5 +338,11 @@ if (require.main === module) {
 }
 module.exports = KeetBridge
 
-process.on('SIGINT', () => bridge.stop().then(() => process.exit(0)))
-process.on('SIGTERM', () => bridge.stop().then(() => process.exit(0)))
+process.on('SIGINT', () => {
+  if (bridge) bridge.stop().then(() => process.exit(0))
+  else process.exit(0)
+})
+process.on('SIGTERM', () => {
+  if (bridge) bridge.stop().then(() => process.exit(0))
+  else process.exit(0)
+})
