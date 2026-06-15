@@ -25,23 +25,13 @@ class KeetBridge {
     if (srv && typeof srv.address === 'function') {
       try {
         const a = srv.address()
-        if (a) {
-          console.error('[bridge] getActiveAddress: dhtServer.address() =>', typeof a, Buffer.isBuffer(a), a.length > 3 ? `${a[0]}.${a[1]}.${a[2]}.${a[3]}:${a.readUInt16BE(4)}` : a)
-          return a
-        }
-      } catch (e) { console.error('[bridge] getActiveAddress: dhtServer.address() error:', e.message) }
+        if (a) return a
+      } catch (e) { /* ignore */ }
     }
     // Fall back to the DHT node's own socket address
     if (this.dht && typeof this.dht.address === 'function') {
-      try {
-        const b = this.dht.address()
-        if (b) {
-          console.error('[bridge] getActiveAddress: dht.address() =>', typeof b, Buffer.isBuffer(b), b.length > 3 ? `${b[0]}.${b[1]}.${b[2]}.${b[3]}:${b.readUInt16BE(4)}` : b)
-          return b
-        }
-      } catch (e) { console.error('[bridge] getActiveAddress: dht.address() error:', e.message) }
+      try { return this.dht.address() } catch (e) { /* ignore */ }
     }
-    console.error('[bridge] getActiveAddress: no address available')
     return null
   }
   constructor () {

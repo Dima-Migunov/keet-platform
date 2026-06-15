@@ -426,14 +426,13 @@ class KeetAdapter(BasePlatformAdapter):
                         len(event.get("sessions", [])),
                         len(event.get("pending", [])))
         elif event_type == "status":
-            logger.info("[Keet] Bridge status: online=%s, dhtVersion=%s, peerCount=%s, host=%s, port=%s, publicKey=%s, debug_addr=%s",
+            logger.info("[Keet] Bridge status: online=%s, dhtVersion=%s, peerCount=%s, host=%s, port=%s, publicKey=%s",
                         event.get("status"),
                         event.get("dhtVersion"),
                         event.get("peerCount"),
                         event.get("host"),
                         event.get("port"),
-                        event.get("publicKey", "")[:16] + "...",
-                        event.get("_debug_addr", "?"))
+                        event.get("publicKey", "")[:16] + "...")
 
     async def _on_message(self, event: dict):
         """Handle an incoming message from Keet."""
