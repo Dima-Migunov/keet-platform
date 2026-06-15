@@ -87,12 +87,17 @@ class JsonStdio {
     }
   }
 
-  _cmdStatus () {
+  async _cmdStatus () {
     try {
       const dht = this.bridge.dht
       let host = null, port = null
-      // Retrieve the listening address from the DHT server (identity or profile)
-      const addr = this.bridge.getActiveAddress()
+      // Retry up to 5 times (1s interval) for address to become available
+      let addr = null
+      for (let attempt = 0; attempt < 5; attempt++) {
+        addr = this.bridge.getActiveAddress()
+        if (addr) break
+        if (attempt < 4) await new Promise(r => setTimeout(r, 1000))
+      }
       if (addr && Buffer.isBuffer(addr) && addr.length >= 6) {
         // first 4 bytes = IP (network byte order), last 2 bytes = port (big‑endian)
         host = `${addr[0]}.${addr[1]}.${addr[2]}.${addr[3]}`
