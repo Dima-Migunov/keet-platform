@@ -118,7 +118,8 @@ class JsonStdio {
         peerCount,
         host,
         port,
-        publicKey
+        publicKey,
+        _debug_addr: addr ? (Buffer.isBuffer(addr) ? `buffer:${addr.length}` : typeof addr) : 'null'
       })
     } catch (err) {
       this.send({ type: 'error', command: 'status', message: err.message })
