@@ -82,6 +82,9 @@ class KeetBridge {
         // Also feed 5 consistent samples so internal logic doesn't revert
         for (let i = 0; i < 5; i++) this.dht._nat.add(host, port)
         console.error('[bridge] DHT nat set: %s:%d', host, port)
+        // Update the DHT's external address for remoteAddress() to work
+        this.dht._externalAddress = { host, port, family: 4 }
+        console.error('[bridge] DHT external address set: %s:%d', host, port)
       }
     } catch (e) {
       console.error('[bridge] DHT nat setup failed:', e.message)
