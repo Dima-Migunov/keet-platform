@@ -232,6 +232,7 @@ class KeetAdapter(BasePlatformAdapter):
         """
         if os.environ.get("KEET_USE_PEAR", "").lower() == "true":
             pear = _pear_cmd()
+            logger.info("[Keet] Using Pear Runtime: %s", pear)
             if not self._bridge_dir:
                 return pear + ["run", "index.js"]
             return pear + ["run", os.path.join(self._bridge_dir, "index.js")]
