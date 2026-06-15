@@ -227,31 +227,12 @@ class KeetAdapter(BasePlatformAdapter):
     def _bridge_node_cmd(self) -> list[str]:
         """Build the Node.js command for the bridge.
 
-        Prefers Pear Runtime (better connectivity, NAT/firewall traversal).
-        Falls back to bare 'node' if Pear is not available.
+        Uses node to run index.js directly.
+        Pear Runtime is NOT compatible with this bridge (Bare runtime lacks
+        Node.js built-in modules). KEET_USE_PEAR env var is handled by
+        check_requirements but has no effect on the spawn command.
         """
-        # Force Pear via env var (legacy override)
-        if os.environ.get("KEET_USE_PEAR", "").lower() == "true":
-            pear = _pear_cmd()
-            logger.info("[Keet] Using Pear Runtime (env override): %s", pear)
-            if not self._bridge_dir:
-                return pear + ["run", "index.js"]
-            return pear + ["run", os.path.join(self._bridge_dir, "index.js")]
-
-        # Auto-detect Pear: check system PATH then local node_modules/.bin
-        pear = shutil.which("pear")
-        if not pear:
-            local_pear = _PLUGIN_DIR / "node_modules" / ".bin" / "pear"
-            if local_pear.is_file():
-                pear = str(local_pear)
-
-        if pear:
-            logger.info("[Keet] Using Pear Runtime (auto-detected): %s", pear)
-            if not self._bridge_dir:
-                return [pear, "run", "index.js"]
-            return [pear, "run", os.path.join(self._bridge_dir, "index.js")]
-
-        # Fallback: run directly with Node.js
+        # Default: run directly with Node.js
         node = (
             shutil.which("node")
             or os.environ.get("KEET_NODE_PATH")
