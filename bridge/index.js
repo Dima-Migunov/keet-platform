@@ -81,46 +81,56 @@ class KeetBridge {
     // announcement expires immediately after creation.
     await this.dht.ready()
     try {
-      const sockAddr = this.dht.io.serverSocket.address()
-      if (sockAddr && sockAddr.port) {
-        const host = this.dht.host || sockAddr.host
-        const port = sockAddr.port
+      // Determine the external address by pinging a bootstrap node.
+      // With symmetric NAT the serverSocket port differs from the port
+      // other peers see. We need the *external* port for relayAddresses.
+      const host = this.dht.host
+      let port = this.dht.io.serverSocket.address().port
 
-        // Force the NatSampler to adopt our address (bypass consensus).
-        // Symmetric NAT means DHT peers see us on varying source ports,
-        // so the sampler cannot agree on a consistent port on its own.
-        const nat = this.dht._nat
-        nat._a = { host, port, hits: 20 }
-        nat._b = { host, port, hits: 20 }
-        nat._samples = []
-        for (let i = 0; i < 32; i++) {
-          nat._samples.push({ host, port, hits: 20 })
+      try {
+        const bootstrap = { host: '88.99.3.86', port: 49737 }
+        const result = await Promise.race([
+          this.dht.ping(bootstrap),
+          new Promise((_, r) => setTimeout(() => r(new Error('stun-timeout')), 5000))
+        ])
+        if (result && result.to && result.to.port) {
+          port = result.to.port
+          console.error('[bridge] External port from STUN: %d (local: %d)', port, this.dht.io.serverSocket.address().port)
         }
-        nat.size = 32
-        nat._threshold = 29
-        nat._top = 0
-
-        // Store values in closure to avoid recursion with dht.host getter
-        const fixedHost = host
-        const fixedPort = port
-
-        // Make host and port non-writable so add() cannot change them
-        Object.defineProperty(nat, 'host', {
-          get: () => fixedHost,
-          set: () => {},
-          configurable: true
-        })
-        Object.defineProperty(nat, 'port', {
-          get: () => fixedPort,
-          set: () => {},
-          configurable: true
-        })
-
-        this.dht.firewalled = false
-        this.dht.io.firewalled = false
-
-        console.error('[bridge] DHT nat set: %s:%d', host, port)
+      } catch (e) {
+        console.error('[bridge] STUN ping failed, using local port:', e.message)
       }
+
+      // Force the NatSampler to adopt our external address.
+      const nat = this.dht._nat
+      nat._a = { host, port, hits: 20 }
+      nat._b = { host, port, hits: 20 }
+      nat._samples = []
+      for (let i = 0; i < 32; i++) {
+        nat._samples.push({ host, port, hits: 20 })
+      }
+      nat.size = 32
+      nat._threshold = 29
+      nat._top = 0
+
+      const fixedHost = host
+      const fixedPort = port
+
+      Object.defineProperty(nat, 'host', {
+        get: () => fixedHost,
+        set: () => {},
+        configurable: true
+      })
+      Object.defineProperty(nat, 'port', {
+        get: () => fixedPort,
+        set: () => {},
+        configurable: true
+      })
+
+      this.dht.firewalled = false
+      this.dht.io.firewalled = false
+
+      console.error('[bridge] DHT nat set: %s:%d', host, port)
     } catch (e) {
       console.error('[bridge] DHT nat setup failed:', e.message)
     }
