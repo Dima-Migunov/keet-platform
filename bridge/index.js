@@ -34,7 +34,7 @@ class KeetBridge {
     }
     return null
   }
-  constructor () {
+  constructor (inviteSeed = null) {
     this.identity = null
     this.swarm = null
     this.dht = null
@@ -44,14 +44,25 @@ class KeetBridge {
     this._listening = false
     this._peerConnections = new Map()
     this._pendingRooms = new Set() // keys being initialized
+    this.inviteSeed = inviteSeed
   }
 
   async start () {
     console.error('[bridge] Starting Keet Bridge...')
 
-    this.identity = new IdentityManager(STORAGE)
-    await this.identity.load()
-    console.error('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
+    // Use seed from invite if provided, otherwise generate new identity
+    if (process.env.KEET_INVITE_URL) {
+      const z32 = require('z32')
+      const crypto = require('hypercore-crypto')
+      const seed = z32.decode(process.env.KEET_INVITE_URL).slice(2, 34)
+      this.identity = new IdentityManager(STORAGE, crypto.keyPair(seed))
+      await this.identity.load()
+      console.error('[bridge] Identity from invite:', b4a.toString(this.identity.publicKey, 'hex'))
+    } else {
+      this.identity = new IdentityManager(STORAGE)
+      await this.identity.load()
+      console.error('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
+    }
 
     // Use a fixed DHT port so remoteAddress() can resolve correctly.
     // Port 49737 is typically taken by the gateway manager's DHT.
@@ -81,10 +92,10 @@ class KeetBridge {
         this.dht._nat.port = port
         // Also feed 5 consistent samples so internal logic doesn't revert
         for (let i = 0; i < 5; i++) this.dht._nat.add(host, port)
+        this.dht.port = port
+        this.dht.firewalled = false
+        this.dht.io.firewalled = false
         console.error('[bridge] DHT nat set: %s:%d', host, port)
-        // Update the DHT's external address for remoteAddress() to work
-        this.dht._externalAddress = { host, port, family: 4 }
-        console.error('[bridge] DHT external address set: %s:%d', host, port)
       }
     } catch (e) {
       console.error('[bridge] DHT nat setup failed:', e.message)

@@ -118,7 +118,22 @@ class PairingManager {
    * on the DHT and send the pairing request.
    */
   _startServer(keyPair, ticket) {
-    const server = this.dht.createServer()
+    // Determine relay addresses for the invite DHT server.
+    // Without relayAddresses, the announce record contains no IP/port
+    // so remote clients cannot connect (findPeer succeeds but connect fails).
+    let relayAddresses = []
+    try {
+      const sockAddr = this.dht.io.serverSocket.address()
+      if (sockAddr && sockAddr.port) {
+        const host = this.dht.host || sockAddr.host
+        relayAddresses.push({ host, port: sockAddr.port })
+        console.error('[pairing] Server relayAddress: %s:%d', host, sockAddr.port)
+      }
+    } catch (e) {
+      console.error('[pairing] Could not determine relayAddress:', e.message)
+    }
+
+    const server = this.dht.createServer({ relayAddresses })
     server.on('connection', noiseSocket => {
       const remoteKey = noiseSocket.remotePublicKey
         ? b4a.toString(noiseSocket.remotePublicKey, 'hex').slice(0, 16)

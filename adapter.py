@@ -302,12 +302,20 @@ class KeetAdapter(BasePlatformAdapter):
     async def _spawn_bridge(self):
         """Spawn the Keet Bridge daemon via Pear Runtime."""
         cmd_parts = self._bridge_node_cmd()
+        
+        # Pass invite URL as environment variable if available
+        env = _node_path_env()
+        if self._last_invite_url:
+            env['KEET_INVITE_URL'] = self._last_invite_url
+            logger.info("[Keet] Passing invite URL to bridge: %s", self._last_invite_url)
+        
         self._process = await asyncio.create_subprocess_exec(
             *cmd_parts,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._bridge_dir,
+            env=env,
         )
 
         task = asyncio.create_task(self._read_bridge_output())
