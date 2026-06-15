@@ -85,16 +85,36 @@ class KeetBridge {
       if (sockAddr && sockAddr.port) {
         const host = this.dht.host || sockAddr.host
         const port = sockAddr.port
+
         // Force the NatSampler to adopt our address (bypass consensus).
         // Symmetric NAT means DHT peers see us on varying source ports,
         // so the sampler cannot agree on a consistent port on its own.
-        this.dht._nat.host = host
-        this.dht._nat.port = port
-        // Also feed 5 consistent samples so internal logic doesn't revert
-        for (let i = 0; i < 5; i++) this.dht._nat.add(host, port)
-        this.dht.port = port
+        const nat = this.dht._nat
+        nat._a = { host, port, hits: 20 }
+        nat._b = { host, port, hits: 20 }
+        nat._samples = []
+        for (let i = 0; i < 32; i++) {
+          nat._samples.push({ host, port, hits: 20 })
+        }
+        nat.size = 32
+        nat._threshold = 29
+        nat._top = 0
+
+        // Make host and port non-writable so add() cannot change them
+        Object.defineProperty(nat, 'host', {
+          get: () => host,
+          set: () => {},
+          configurable: true
+        })
+        Object.defineProperty(nat, 'port', {
+          get: () => port,
+          set: () => {},
+          configurable: true
+        })
+
         this.dht.firewalled = false
         this.dht.io.firewalled = false
+
         console.error('[bridge] DHT nat set: %s:%d', host, port)
       }
     } catch (e) {
