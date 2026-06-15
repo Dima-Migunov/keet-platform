@@ -111,7 +111,7 @@ class JsonStdio {
         host = addr.host || addr.address || null
         port = addr.port != null ? parseInt(addr.port, 10) : null
       }
-      const peerCount = dht && dht.peers ? dht.peers.size : (dht && dht._connections ? dht._connections.size : 0)
+      const peerCount = dht && dht.nodes ? dht.nodes.toArray().length : 0
       let dhtVersion = null
       try { dhtVersion = require('hyperdht/package.json').version } catch (e) {}
       const publicKey = this.bridge.identity ? b4a.toString(this.bridge.identity.publicKey, 'hex') : null
