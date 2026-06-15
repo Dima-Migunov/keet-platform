@@ -109,7 +109,7 @@ class JsonStdio {
       } else if (addr && typeof addr === 'object') {
         // hyperdht v6 may return { host, port } or { address, port }
         host = addr.host || addr.address || null
-        port = addr.port || null
+        port = addr.port != null ? parseInt(addr.port, 10) : null
       }
       const peerCount = dht && dht.peers ? dht.peers.size : (dht && dht._connections ? dht._connections.size : 0)
       let dhtVersion = null
