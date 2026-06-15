@@ -130,6 +130,9 @@ class KeetBridge {
       this.dht.firewalled = false
       this.dht.io.firewalled = false
 
+      // Store external address for use by pairing.js
+      this._externalAddress = { host, port }
+
       console.error('[bridge] DHT nat set: %s:%d', host, port)
     } catch (e) {
       console.error('[bridge] DHT nat setup failed:', e.message)

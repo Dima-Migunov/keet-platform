@@ -57,17 +57,24 @@ class PairingManager {
     // so the phone can find us without relying on DHT findPeer.
     let additionalNodes = null
     try {
-      const addr = this.bridge.dht.remoteAddress()
-      if (addr && addr.host && addr.port) {
-        additionalNodes = [{ host: addr.host, port: addr.port }]
-        console.error('[pairing] Including additionalNode: %s:%d', addr.host, addr.port)
+      // Use the STUN-discovered external address if available
+      const extAddr = this.bridge._externalAddress
+      if (extAddr && extAddr.host && extAddr.port) {
+        additionalNodes = [{ host: extAddr.host, port: extAddr.port }]
+        console.error('[pairing] Including additionalNode (STUN): %s:%d', extAddr.host, extAddr.port)
       } else {
-        // Fallback: use the actual socket address
-        const sockAddr = this.bridge.dht.io.serverSocket.address()
-        if (sockAddr && sockAddr.port) {
-          const host = this.bridge.dht.host || sockAddr.host
-          additionalNodes = [{ host, port: sockAddr.port }]
-          console.error('[pairing] Including additionalNode (fallback): %s:%d', host, sockAddr.port)
+        // Fallback: use dht.remoteAddress or socket address
+        const addr = this.bridge.dht.remoteAddress()
+        if (addr && addr.host && addr.port) {
+          additionalNodes = [{ host: addr.host, port: addr.port }]
+          console.error('[pairing] Including additionalNode: %s:%d', addr.host, addr.port)
+        } else {
+          const sockAddr = this.bridge.dht.io.serverSocket.address()
+          if (sockAddr && sockAddr.port) {
+            const host = this.bridge.dht.host || sockAddr.host
+            additionalNodes = [{ host, port: sockAddr.port }]
+            console.error('[pairing] Including additionalNode (fallback): %s:%d', host, sockAddr.port)
+          }
         }
       }
     } catch (e) {
@@ -123,11 +130,18 @@ class PairingManager {
     // so remote clients cannot connect (findPeer succeeds but connect fails).
     let relayAddresses = []
     try {
-      const sockAddr = this.dht.io.serverSocket.address()
-      if (sockAddr && sockAddr.port) {
-        const host = this.dht.host || sockAddr.host
-        relayAddresses.push({ host, port: sockAddr.port })
-        console.error('[pairing] Server relayAddress: %s:%d', host, sockAddr.port)
+      // Use STUN-discovered external address if available
+      const extAddr = this.bridge._externalAddress
+      if (extAddr && extAddr.host && extAddr.port) {
+        relayAddresses.push({ host: extAddr.host, port: extAddr.port })
+        console.error('[pairing] Server relayAddress (STUN): %s:%d', extAddr.host, extAddr.port)
+      } else {
+        const sockAddr = this.dht.io.serverSocket.address()
+        if (sockAddr && sockAddr.port) {
+          const host = this.dht.host || sockAddr.host
+          relayAddresses.push({ host, port: sockAddr.port })
+          console.error('[pairing] Server relayAddress: %s:%d', host, sockAddr.port)
+        }
       }
     } catch (e) {
       console.error('[pairing] Could not determine relayAddress:', e.message)
