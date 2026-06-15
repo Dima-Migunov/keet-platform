@@ -25,9 +25,12 @@ class KeetBridge {
     if (srv && typeof srv.address === 'function') {
       try {
         const a = srv.address()
-        // May be Buffer (6-byte) or a string "host:port"
-        return a
+        if (a) return a
       } catch (e) { /* ignore */ }
+    }
+    // Fall back to the DHT node's own socket address
+    if (this.dht && typeof this.dht.address === 'function') {
+      try { return this.dht.address() } catch (e) { /* ignore */ }
     }
     return null
   }

@@ -321,7 +321,7 @@ class KeetAdapter(BasePlatformAdapter):
         self._tasks.add(task_err)
         task_err.add_done_callback(self._tasks.discard)
 
-        logger.info("[Keet] Bridge spawned via Pear: %s", " ".join(cmd_parts))
+        logger.info("[Keet] Bridge spawned: %s", " ".join(cmd_parts))
 
     async def _wait_bridge_ready(self) -> None:
         """Wait for bridge to signal readiness (identity event)."""

@@ -94,14 +94,8 @@ class JsonStdio {
       // Retrieve the listening address from the DHT server (identity or profile)
       const addr = this.bridge.getActiveAddress()
       if (addr && Buffer.isBuffer(addr) && addr.length >= 6) {
-        // first 4 bytes = IP (little-endian), last 2 bytes = port (big‑endian as per hyperdht)
-        const ip = addr.readUInt32LE(0)
-        host = [
-          (ip >>> 24) & 255,
-          (ip >>> 16) & 255,
-          (ip >>> 8) & 255,
-          ip & 255
-        ].join('.')
+        // first 4 bytes = IP (network byte order), last 2 bytes = port (big‑endian)
+        host = `${addr[0]}.${addr[1]}.${addr[2]}.${addr[3]}`
         port = addr.readUInt16BE(4)
       } else if (addr && typeof addr === 'string') {
         const parts = addr.split(':')
