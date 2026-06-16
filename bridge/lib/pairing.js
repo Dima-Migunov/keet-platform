@@ -1,7 +1,9 @@
 const b4a = require('b4a')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
+const sodium = require('sodium-universal')
 const blind = require('blind-pairing-core')
+const Hyperswarm = require('hyperswarm')
 const z32 = require('z32')
 
 const { CandidateRequest, MemberRequest, createInvite, decodeInvite } = blind
@@ -87,47 +89,39 @@ class PairingManager {
       status: 'active'
     })
 
-    // Start a DHT server listening on the seed-derived keyPair so the
-    // Keet app (which derives the same key from the invite seed) can
-    // connect and send the pairing request.
-    // Also announce the discoveryKey in the DHT so the app can find us
-    // via the standard Hyperswarm lookup flow.
+    // Start a Hyperswarm swarm for this invite that joins the
+    // discoveryKey topic. The phone's Keet app does the same:
+    // swarm.join(discoveryKey, { server: false }), and Hyperswarm
+    // connects them through DHT relay/holepunching.
     const inviteKP = crypto.keyPair(invite.seed)
-    await this._startServer(inviteKP, ticket, invite.discoveryKey)
+    this._startServer(inviteKP, ticket, invite.discoveryKey)
 
     return { url, ticket, roomKey: b4a.toString(topicKey, 'hex') }
   }
 
   /**
-   * Start listening on the DHT for incoming candidate connections.
+   * Start listening for incoming candidate connections via Hyperswarm.
    *
-   * Two things happen here:
-   * 1. Create a DHT server on the invite's seed-derived keyPair so we can
-   *    accept encrypted blind-pairing connections from the Keet app.
-   * 2. Announce the invite's discoveryKey in the DHT so the Keet app can
-   *    find us via DHT lookup (the standard Hyperswarm discovery mechanism).
-   *
-   * The Keet app decodes the invite to get the discoveryKey, does
-   * swarm.join(discoveryKey) which triggers a DHT lookup, finds our
-   * announce record, and connects via DHT relay/holepunching.
-   *
-   * IMPORTANT: We do NOT set relayAddresses. Behind symmetric NAT the
-   * STUN-discovered port is only valid for the STUN flow itself, not for
-   * inbound connections. Setting it in relayAddresses would make clients
-   * waste time trying a dead address before falling back to DHT relay.
-   * Instead we rely on HyperDHT's built-in relay mechanism through its
-   * distributed relay nodes, which works even through symmetric NAT.
+   * Creates a dedicated Hyperswarm instance for this invite that joins
+   * the discoveryKey topic. This is how Keet/Pear Runtime natively
+   * handles invites — the phone's Keet app does swarm.join(discoveryKey,
+   * { server: false }) and Hyperswarm handles DHT discovery, relay, and
+   * holepunching automatically through the global DHT network.
    */
-  async _startServer(keyPair, ticket, discoveryKey) {
-    // Step 1: Create a DHT server on the invite keyPair.
-    // No relayAddresses — for symmetric NAT, rely on DHT's built-in relay.
-    const server = this.dht.createServer()
-    server.on('connection', noiseSocket => {
+  _startServer(keyPair, ticket, discoveryKey) {
+    const swarm = new Hyperswarm({
+      keyPair,
+      dht: this.dht,
+      maxClientConnections: 4
+    })
+
+    swarm.on('connection', (noiseSocket, info) => {
       const remoteKey = noiseSocket.remotePublicKey
         ? b4a.toString(noiseSocket.remotePublicKey, 'hex').slice(0, 16)
         : 'unknown'
-      console.error('[pairing] INCOMING CONNECTION ticket=%s remote=%s',
-        ticket.slice(0, 16), remoteKey)
+      console.error('[pairing] INCOMING CONNECTION ticket=%s remote=%s client=%s',
+        ticket.slice(0, 16), remoteKey, info.client)
+
       noiseSocket.on('data', rawBuf => {
         const len = rawBuf.length
         const first = rawBuf[0]
@@ -145,27 +139,15 @@ class PairingManager {
       })
     })
 
-    await server.listen(keyPair)
-    console.error('[pairing] Server listening on invite keyPair for ticket=%s', ticket.slice(0, 16))
+    // Join the discoveryKey topic — Hyperswarm handles DHT announce +
+    // relay node connections automatically.
+    swarm.join(discoveryKey, { server: true })
+    // Also flush immediately so the announce propagates faster
+    swarm.flush()
 
-    // Step 2: Announce the discoveryKey in the DHT.
-    // This is the key that the Keet app looks up when joining the invite.
-    // No relayAddresses — let DHT's built-in relay mechanism handle
-    // connectivity through symmetric NAT.
-    try {
-      const announceStream = this.dht.announce(discoveryKey, keyPair)
-      server._announceStream = announceStream
-      console.error('[pairing] Announced discoveryKey for ticket=%s', ticket.slice(0, 16))
+    console.error('[pairing] Swarm joined discoveryKey for ticket=%s', ticket.slice(0, 16))
 
-      // Consume the stream (it runs indefinitely, refreshing the announce)
-      announceStream.finished().catch(e => {
-        console.error('[pairing] Announce stream ended ticket=%s: %s', ticket.slice(0, 16), e.message)
-      })
-    } catch (e) {
-      console.error('[pairing] Announce failed for ticket=%s: %s', ticket.slice(0, 16), e.message)
-    }
-
-    this._servers.set(ticket, server)
+    this._servers.set(ticket, swarm)
   }
 
   /**
@@ -279,14 +261,10 @@ class PairingManager {
     const session = this.sessions.get(ticket)
     if (!session) return false
     session.status = 'cancelled'
-    // Close this invite's DHT server
-    const server = this._servers.get(ticket)
-    if (server) {
-      try { server.close() } catch {}
-      // Stop the announce stream
-      if (server._announceStream) {
-        try { server._announceStream.destroy() } catch {}
-      }
+    // Close this invite's swarm
+    const swarm = this._servers.get(ticket)
+    if (swarm) {
+      try { swarm.leave(swarm._topic); swarm.destroy() } catch {}
       this._servers.delete(ticket)
     }
     return true
@@ -305,11 +283,8 @@ class PairingManager {
    * Close all pending servers and cleanup.
    */
   close() {
-    for (const [, server] of this._servers) {
-      try { server.close() } catch {}
-      if (server._announceStream) {
-        try { server._announceStream.destroy() } catch {}
-      }
+    for (const [, swarm] of this._servers) {
+      try { swarm.destroy() } catch {}
     }
     this._servers.clear()
     this.sessions.clear()
