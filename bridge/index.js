@@ -72,8 +72,15 @@ class KeetBlindBridge {
 
     // 4. Явный announce invite discoveryKey → invite keyPair
     // (чтобы телефон мог найти bridge через dht.lookup(discoveryKey))
-    await this.dht.announce(discoKey, inviteKeyPair, { relayAddresses: null })
+    await this.dht.announce(discoKey, inviteKeyPair)
     console.error('[bridge] Announced discoveryKey on DHT')
+    console.error('[bridge] DHT host: %s (firewalled: %s)', this.dht.host, this.dht.firewalled)
+
+    // Periodic re-announce (DHT announce expires)
+    this._announceInterval = setInterval(() => {
+      this.dht.announce(discoKey, inviteKeyPair).catch(() => {})
+      console.error('[bridge] Re-announced discoveryKey')
+    }, 30000)  // every 30 seconds
 
     // 5. Кодируем URL: keet://chat/<z32(invite + extension)>
     const extKey = crypto.randomBytes(32)
@@ -162,6 +169,7 @@ class KeetBlindBridge {
 
   async stop () {
     this._listening = false
+    if (this._announceInterval) clearInterval(this._announceInterval)
     for (const [, s] of this._sockets) try { s.destroy() } catch {}
     this._sockets.clear()
     if (this._server) await this._server.close()
