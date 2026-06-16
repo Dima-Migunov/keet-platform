@@ -67,10 +67,25 @@ class KeetBridge {
     // Use a DHT port within the host's allowed port range (10000-20000)
     const DHT_PORT = 11000
 
+    // Custom bootstrap nodes for Pear Runtime / Keet DHT network
+    // Extracted from the phone's invite URL extension data.
+    // These allow our bridge to join the same DHT network as the Keet app.
+    const KEET_BOOTSTRAP = [
+      { host: '110.224.95.143', port: 40291 },
+      { host: '35.235.47.179', port: 29275 },
+      { host: '35.58.190.161', port: 20801 },
+      { host: '27.155.43.181', port: 31095 },
+      { host: '31.215.62.29', port: 40819 },
+      { host: '54.1.3.34', port: 39306 },
+      { host: '54.74.194.157', port: 17588 },
+      { host: '166.74.194.138', port: 37700 },
+    ]
+
     // Create DHT using the identity key pair with an explicit port.
     this.dht = new DHT({
       keyPair: this.identity.keyPair,
       port: DHT_PORT,
+      bootstrap: KEET_BOOTSTRAP,
     })
 
     // Wait for DHT to fully bootstrap (socket bound, peers discovered).
