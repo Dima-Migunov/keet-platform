@@ -63,6 +63,9 @@ class JsonStdio {
       case 'send_welcome':
         this._cmdSendWelcome(params.pubkey)
         break
+      case 'join_invite':
+        this._cmdJoinInvite(params.url)
+        break
       case 'create_invite':
         this._cmdCreateInvite(params.room_key)
         break
@@ -204,6 +207,70 @@ class JsonStdio {
       this.send({ type: 'invite_created', ...result })
     } catch (err) {
       this.send({ type: 'error', command: 'create_invite', message: err.message })
+    }
+  }
+
+  async _cmdJoinInvite (url) {
+    try {
+      const z32 = require('z32')
+      const blind = require('blind-pairing-core')
+      const crypto = require('hypercore-crypto')
+      const b4a = require('b4a')
+
+      // Decode invite URL: keet://chat/<z32 buffer>
+      const buf = z32.decode(url.replace('keet://chat/', ''))
+      // First 66 bytes = base Invite
+      const baseBuf = buf.slice(0, 66)
+      const decoded = blind.decodeInvite(baseBuf)
+      const inviteKP = crypto.keyPair(decoded.seed)
+
+      console.error('[stdio] Joining invite: discoveryKey=%s', b4a.toString(decoded.discoveryKey, 'hex').slice(0, 16))
+
+      // Connect to the host via DHT
+      const dht = this.bridge.dht
+      const conn = dht.connect(inviteKP.publicKey)
+
+      const result = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Connection timeout')), 30000)
+        conn.on('open', () => {
+          clearTimeout(timeout)
+          console.error('[stdio] DHT connected to invite host')
+
+          // Send CandidateRequest
+          const req = new blind.CandidateRequest(decoded, b4a.alloc(0))
+          const encoded = req.encode()
+          conn.write(encoded)
+
+          // Wait for response
+          const responseTimeout = setTimeout(() => reject(new Error('No response')), 15000)
+          conn.once('data', (data) => {
+            clearTimeout(responseTimeout)
+            try {
+              req.handleResponse(data)
+              console.error('[stdio] Pairing accepted, room key:', b4a.toString(req.auth.key, 'hex'))
+              resolve(req.auth)
+            } catch (e) {
+              reject(new Error('Pairing rejected: ' + e.message))
+            }
+          })
+          conn.once('error', reject)
+        })
+        conn.on('error', reject)
+      })
+
+      // Join the room
+      const room = await this.bridge.createRoom(result.key)
+      console.error('[stdio] Joined room from invite!')
+      this.send({
+        type: 'join_invite_result',
+        url,
+        status: 'joined',
+        room_key: b4a.toString(result.key, 'hex'),
+        encryption_key: b4a.toString(result.encryptionKey, 'hex')
+      })
+    } catch (err) {
+      console.error('[stdio] join_invite error:', err.message)
+      this.send({ type: 'error', command: 'join_invite', message: err.message })
     }
   }
 
