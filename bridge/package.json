@@ -1,26 +1,24 @@
 {
   "private": true,
   "name": "keet-bridge",
-  "version": "0.1.0",
-  "description": "Keet Bridge Daemon for Hermes Agent — Pear Runtime app",
+  "version": "0.3.0",
+  "description": "Keet Bridge for Hermes Agent — Pear Runtime + Blind-Pairing",
   "main": "index.js",
   "pear": {
-    "type": "app",
-    "name": "keet-bridge",
-    "version": "0.1.0"
+    "name": "keet-hermes-bridge",
+    "gui": false
   },
   "scripts": {
-    "start": "pear run index.js"
+    "start": "node index.js",
+    "pear": "pear run ."
   },
   "dependencies": {
     "b4a": "^1.8.1",
     "blind-pairing-core": "^2.10.1",
     "compact-encoding": "^3.2.0",
-    "hypercore": "^11.33.1",
     "hypercore-crypto": "^3.7.0",
     "hyperdht": "^6.32.0",
     "hyperswarm": "^4.17.0",
-    "keet-identity-key": "^3.2.0",
-    "sodium-native": "^5.1.0"
+    "z32": "^1.1.0"
   }
 }

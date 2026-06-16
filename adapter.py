@@ -422,6 +422,10 @@ class KeetAdapter(BasePlatformAdapter):
             room_key = event.get("room_key", "")
             logger.info("[Keet] Member joined: %s in %s", pubkey[:16], room_key[:16] if room_key else "?")
             self.add_allowed_user(pubkey)
+        elif event_type == "member_left":
+            pubkey = event.get("pubkey", "")
+            room_key = event.get("room_key", "")
+            logger.info("[Keet] Member left: %s from %s", pubkey[:16], room_key[:16] if room_key else "?")
         elif event_type == "pairing_result":
             logger.info("[Keet] Pairing result: candidate %s → %s",
                         event.get("candidate_id", "?")[:16],

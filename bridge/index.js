@@ -1,359 +1,188 @@
 #!/usr/bin/env node
-const b4a = require('b4a')
-const path = require('path')
-const hypercore = require('hypercore')
-const crypto = require('hypercore-crypto')
-const Hyperswarm = require('hyperswarm')
+/**
+ * Keet Bridge — Pear Runtime + Blind-Pairing
+ *
+ * Архитектура:
+ * 1. Bridge создаёт blind-pairing инвайт
+ * 2. DHT сервер анонсируется через Pear DHT (те же ноды что у Keet)
+ * 3. Телефон открывает keet://chat/<z32> → находит bridge в DHT
+ * 4. Blind-pairing handshake → P2P сокет (NoiseSocket)
+ * 5. Текстовые сообщения релеятся через stdio в Hermes
+ */
+const blindPairing = require('blind-pairing-core')
 const DHT = require('hyperdht')
+const Hyperswarm = require('hyperswarm')
+const crypto = require('hypercore-crypto')
+const z32 = require('z32')
+const b4a = require('b4a')
 
-const IdentityManager = require('./lib/identity')
-const RoomManager = require('./lib/room')
-const PairingManager = require('./lib/pairing')
 const JsonStdio = require('./lib/stdio')
 
-process.title = 'keet-bridge'
-
-// Storage directory: env var or default to ./data next to this script
-const STORAGE = process.env.KEET_STORAGE_DIR || path.join(__dirname, 'data')
-
-class KeetBridge {
-  // Return the listening address (Buffer or string) from the active DHT server.
-  // Preference: identity server (`dhtServer`) → profile server (`profileServer`).
-  // If no server is listening yet, returns null.
-  getActiveAddress () {
-    const srv = this.dhtServer || this.profileServer
-    if (srv && typeof srv.address === 'function') {
-      try {
-        const a = srv.address()
-        if (a) return a
-      } catch (e) { /* ignore */ }
-    }
-    // Fall back to the DHT node's own socket address
-    if (this.dht && typeof this.dht.address === 'function') {
-      try { return this.dht.address() } catch (e) { /* ignore */ }
-    }
-    return null
-  }
-  constructor (inviteSeed = null) {
-    this.identity = null
-    this.swarm = null
+class KeetBlindBridge {
+  constructor () {
     this.dht = null
-    this.rooms = new Map()
-    this.pairing = null
+    this.swarm = null
     this.stdio = null
+    this._server = null
+    this._invite = null
+    this._inviteUrl = null
     this._listening = false
-    this._peerConnections = new Map()
-    this._pendingRooms = new Set() // keys being initialized
-    this.inviteSeed = inviteSeed
+    this._sockets = new Map()
   }
+
+  getInviteUrl () { return this._inviteUrl || '' }
+  getTopicHex () { return this._invite ? b4a.toString(this._invite.discoveryKey, 'hex') : '' }
 
   async start () {
-    console.error('[bridge] Starting Keet Bridge...')
+    console.error('[bridge] Starting Keet Bridge (blind-pairing + Pear DHT)...')
 
-    // Use seed from invite if provided, otherwise generate new identity
-    if (process.env.KEET_INVITE_URL) {
-      const z32 = require('z32')
-      const crypto = require('hypercore-crypto')
-      const seed = z32.decode(process.env.KEET_INVITE_URL).slice(2, 34)
-      this.identity = new IdentityManager(STORAGE, crypto.keyPair(seed))
-      await this.identity.load()
-      console.error('[bridge] Identity from invite:', b4a.toString(this.identity.publicKey, 'hex'))
-    } else {
-      this.identity = new IdentityManager(STORAGE)
-      await this.identity.load()
-      console.error('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
+    // 1. Конфигурация DHT — Pear DHT ноды или fallback
+    let bootstrap = null
+    if (typeof Pear !== 'undefined' && Pear.config && Pear.config.dht && Pear.config.dht.nodes) {
+      bootstrap = Pear.config.dht.nodes
+      console.error('[bridge] Using Pear DHT with %d bootstrap nodes', bootstrap.length)
     }
 
-    // Use a DHT port within the host's allowed port range (10000-20000)
-    const DHT_PORT = 11000
-
-    // Custom bootstrap nodes for Pear Runtime / Keet DHT network
-    // Extracted from the phone's invite URL extension data.
-    // These allow our bridge to join the same DHT network as the Keet app.
-    const KEET_BOOTSTRAP = [
-      { host: '110.224.95.143', port: 40291 },
-      { host: '35.235.47.179', port: 29275 },
-      { host: '35.58.190.161', port: 20801 },
-      { host: '27.155.43.181', port: 31095 },
-      { host: '31.215.62.29', port: 40819 },
-      { host: '54.1.3.34', port: 39306 },
-      { host: '54.74.194.157', port: 17588 },
-      { host: '166.74.194.138', port: 37700 },
-    ]
-
-    // Create DHT using the identity key pair with an explicit port.
-    this.dht = new DHT({
-      keyPair: this.identity.keyPair,
-      port: DHT_PORT,
-      bootstrap: KEET_BOOTSTRAP,
-    })
-
-    // Wait for DHT to fully bootstrap (socket bound, peers discovered).
-    // Then feed the NatSampler so remoteAddress() returns a valid
-    // {host, port} pair.  Without this dht.port stays 0 and the
-    // announcer never adds relay addresses, so the invite-keypair
-    // announcement expires immediately after creation.
+    this.dht = new DHT({ bootstrap })
     await this.dht.ready()
-    console.error('[bridge] DHT ready, host=%s', this.dht.host)
-    // Do NOT force NatSampler — let the DHT's built-in relay mechanism
-    // handle connectivity through symmetric NAT automatically.
+    console.error('[bridge] DHT ready')
 
-    // Blind-pairing for invite links
-    this.pairing = new PairingManager(this.dht, this)
+    // 2. Создание blind-pairing инвайта (ручная сборка — Keet требует ASCII '1' и flags=97)
+    const inviteSeed = crypto.randomBytes(32)
+    const inviteKeyPair = crypto.keyPair(inviteSeed)
+    const discoKey = crypto.discoveryKey(inviteSeed)  // from seed, not publicKey (old working bridge used this)
 
-    this.swarm = new Hyperswarm({
-      keyPair: this.identity.keyPair,
+    // Собираем буфер: version(1) + flags(1) + seed(32) + discoveryKey(32) = 66 bytes
+    const inviteBuf = b4a.alloc(66)
+    inviteBuf[0] = 1        // version = 1 (binary) — Keet принимает и 1 и '1', но наша старая ссылка работала с 1
+    inviteBuf[1] = 0x61     // flags = 97 (0x61) — Keet's expected flags
+    b4a.copy(inviteSeed, inviteBuf, 2)
+    b4a.copy(discoKey, inviteBuf, 34)
+
+    this._invite = { invite: inviteBuf, seed: inviteSeed, publicKey: inviteKeyPair.publicKey, discoveryKey: discoKey }
+
+    // 3. DHT сервер — слушает invite keyPair
+    this._server = this.dht.createServer()
+    this._server.on('connection', (socket) => {
+      console.error('[bridge] Incoming DHT connection')
+      this._handleSocket(socket)
     })
-    this.swarm.on('connection', (conn, info) => {
-      console.error('[bridge] Swarm connection:', info.client ? 'outgoing' : 'incoming')
-      this._handleSwarmConnection(conn, info)
-    })
+    await this._server.listen(inviteKeyPair)
+    console.error('[bridge] DHT server listening on invite key')
 
-    // stdio JSON protocol
+    // 4. Явный announce invite discoveryKey → invite keyPair
+    // (чтобы телефон мог найти bridge через dht.lookup(discoveryKey))
+    await this.dht.announce(discoKey, inviteKeyPair, { relayAddresses: null })
+    console.error('[bridge] Announced discoveryKey on DHT')
+
+    // 5. Кодируем URL: keet://chat/<z32(invite + extension)>
+    const extKey = crypto.randomBytes(32)
+    const extTypeByte = b4a.alloc(1)
+    extTypeByte[0] = 148  // 0x94 — encryption key type
+    const extension = b4a.concat([extTypeByte, extKey])
+    const fullPayload = b4a.concat([this._invite.invite, extension])
+    const encoded = z32.encode(fullPayload)
+    this._inviteUrl = `keet://chat/${encoded}`
+    console.error('')
+    console.error('==================================================')
+    console.error('INVITE LINK (send to phone):')
+    console.error(this._inviteUrl)
+    console.error('==================================================')
+    console.error('')
+
+    // 6. Stdio протокол
     this.stdio = new JsonStdio(this)
     this.stdio.start()
+    this._listening = true
 
-    await this._announce()
-    await this._announceProfileDiscovery()
-
-    // Announce bridge identity via stdio
-    const pubkeyHex = b4a.toString(this.identity.publicKey, 'hex')
-    let profileKeyHex = ''
-    try {
-      const discoveryPair = this.identity.getDiscoveryKeyPair()
-      if (discoveryPair && discoveryPair.publicKey) {
-        profileKeyHex = b4a.toString(discoveryPair.publicKey, 'hex')
-      }
-    } catch (e) {}
+    // 7. Сигналы адаптеру
     this.stdio.send({
       type: 'identity',
-      public_key: pubkeyHex,
-      profile_discovery_key: profileKeyHex
+      public_key: b4a.toString(this._invite.publicKey, 'hex'),
+      profile_discovery_key: this.getTopicHex()
     })
-
-    // Create welcome room (keyed by own public key) so users can discover it
-    const welcomeKey = this.identity.publicKey
-    await this.createRoom(welcomeKey)
     this.stdio.send({
       type: 'welcome_room_ready',
-      room_key: b4a.toString(welcomeKey, 'hex')
+      room_key: this.getTopicHex(),
+      invite_url: this._inviteUrl
+    })
+    console.error('[bridge] Ready!')
+  }
+
+  _handleSocket (socket) {
+    const id = Math.random().toString(36).slice(2, 10)
+    this._sockets.set(id, socket)
+
+    this.stdio.send({
+      type: 'member_joined',
+      pubkey: id,
+      room_key: this.getTopicHex()
     })
 
-    this._listening = true
-    console.error('[bridge] Ready')
-    console.error('[bridge] Public key:', b4a.toString(this.identity.publicKey, 'hex'))
-  }
-
-  async _announce () {
-    // Announce bridge identity key — direct DHT connections
-    this.dhtServer = this.dht.createServer((conn) => {
-      console.error('[bridge] DHT connection (identity key)')
-      this._handleDhtConnection(conn, false)
-    })
-    await this.dhtServer.listen(this.identity.keyPair)
-  }
-
-  async _announceProfileDiscovery () {
-    // Announce profile discovery key — Keet users can find us via contact search
-    const discoveryPair = this.identity.getDiscoveryKeyPair()
-    if (!discoveryPair || !discoveryPair.publicKey) {
-      console.error('[bridge] No profile discovery key available')
-      return
-    }
-    console.error('[bridge] Profile discovery key:', b4a.toString(discoveryPair.publicKey, 'hex'))
-    this.profileServer = this.dht.createServer((conn) => {
-      console.error('[bridge] DHT connection (profile discovery)')
-      this._handleDhtConnection(conn, true)
-    })
-    await this.profileServer.listen(discoveryPair)
-  }
-
-  _handleDhtConnection (conn, isProfile) {
-    // Replicate ALL rooms over this connection
-    // Each room's core.replicate() creates a protomux channel automatically
-    for (const room of this.rooms.values()) {
-      const rstream = room.core.replicate(!isProfile)
-      // Forward data bidirectionally
-      const fwdConnToStream = (data) => { try { rstream.write(data) } catch (e) {} }
-      const fwdStreamToConn = (data) => { try { conn.write(data) } catch (e) {} }
-      conn.on('data', fwdConnToStream)
-      rstream.on('data', fwdStreamToConn)
-      conn.on('close', () => {
-        rstream.destroy()
-        conn.off('data', fwdConnToStream)
-        rstream.off('data', fwdStreamToConn)
-      })
-      rstream.on('end', () => {
-        conn.off('data', fwdConnToStream)
-        rstream.off('data', fwdStreamToConn)
-      })
-    }
-  }
-
-  _handleSwarmConnection (conn, info) {
-    // Swarm connection — replicate all active rooms
-    // Each room's core.replicate() multiplexes via protomux internally
-    for (const room of this.rooms.values()) {
-      const rstream = room.core.replicate(info.client !== undefined ? info.client : true)
-      const fwdConnToStream = (data) => { try { rstream.write(data) } catch (e) {} }
-      const fwdStreamToConn = (data) => { try { conn.write(data) } catch (e) {} }
-      conn.on('data', fwdConnToStream)
-      rstream.on('data', fwdStreamToConn)
-      conn.on('close', () => {
-        rstream.destroy()
-        conn.off('data', fwdConnToStream)
-        rstream.off('data', fwdStreamToConn)
-      })
-      rstream.on('end', () => {
-        conn.off('data', fwdConnToStream)
-        rstream.off('data', fwdStreamToConn)
-      })
-    }
-  }
-
-  async connectToPeer (pubkey, roomKey) {
-    // Connect to a peer by their DHT public key
-    const pubkeyHex = b4a.toString(pubkey, 'hex')
-    if (this._peerConnections.has(pubkeyHex)) {
-      console.error('[bridge] Already connected to peer:', pubkeyHex.slice(0, 16))
-      return
-    }
-
-    console.error('[bridge] Connecting to peer:', pubkeyHex.slice(0, 16))
-    const conn = this.dht.connect(pubkey)
-    this._peerConnections.set(pubkeyHex, conn)
-
-    // If no specific room given, replicate all active rooms
-    if (!roomKey) {
-      for (const room of this.rooms.values()) {
-        const rstream = room.core.replicate(true)
-        const fwdConnToStream = (data) => { try { rstream.write(data) } catch (e) {} }
-        const fwdStreamToConn = (data) => { try { conn.write(data) } catch (e) {} }
-        conn.on('data', fwdConnToStream)
-        rstream.on('data', fwdStreamToConn)
-        conn.on('close', () => {
-          rstream.destroy()
-          conn.off('data', fwdConnToStream)
-          rstream.off('data', fwdStreamToConn)
-          this._peerConnections.delete(pubkeyHex)
-        })
-        rstream.on('end', () => {
-          conn.off('data', fwdConnToStream)
-          rstream.off('data', fwdStreamToConn)
-        })
-      }
-    } else {
-      // Replicate specific room
-      const roomKeyHex = b4a.toString(roomKey, 'hex')
-      let room = this.rooms.get(roomKeyHex)
-      if (!room) {
-        room = await this.createRoom(roomKey)
-      }
-      const rstream = room.core.replicate(true)
-      const fwdConnToStream = (data) => { try { rstream.write(data) } catch (e) {} }
-      const fwdStreamToConn = (data) => { try { conn.write(data) } catch (e) {} }
-      conn.on('data', fwdConnToStream)
-      rstream.on('data', fwdStreamToConn)
-      conn.on('close', () => {
-        rstream.destroy()
-        conn.off('data', fwdConnToStream)
-        rstream.off('data', fwdStreamToConn)
-        this._peerConnections.delete(pubkeyHex)
-      })
-      rstream.on('end', () => {
-        conn.off('data', fwdConnToStream)
-        rstream.off('data', fwdStreamToConn)
-      })
-    }
-  }
-
-  async createRoom (topicKey) {
-    const keyHex = b4a.toString(topicKey, 'hex')
-    if (this.rooms.has(keyHex)) return this.rooms.get(keyHex)
-    if (this._pendingRooms.has(keyHex)) {
-      // Wait for the pending initialization to complete
-      while (this._pendingRooms.has(keyHex)) {
-        await new Promise(r => setTimeout(r, 100))
-      }
-      return this.rooms.get(keyHex)
-    }
-
-    const identityKey = this.identity.keyPair.publicKey
-    const identityKeyPair = this.identity.keyPair
-    this._pendingRooms.add(keyHex)
-    console.error('[bridge] Creating room:', keyHex.slice(0, 16))
-
-    // Core keyed by bridge identity (we can write), topic key = room key (for swarm discovery)
-    const room = new RoomManager(identityKey, identityKeyPair, STORAGE, topicKey)
-
-    // Forward incoming messages from other participants to stdio
-    room.onmessage = (msg, seq, roomKey) => {
-      const roomKeyHex = b4a.toString(roomKey, 'hex')
+    socket.on('data', (data) => {
+      const text = data.toString('utf-8').trim()
+      if (!text) return
+      console.error('[bridge] Message: %s', text.slice(0, 80))
       this.stdio.send({
         type: 'message',
-        chat_id: roomKeyHex,
-        from: b4a.toString(msg.sender, 'hex'),
-        text: msg.content,
-        ts: msg.timestamp
+        chat_id: this.getTopicHex(),
+        from: id,
+        text,
+        ts: Date.now()
       })
-    }
+    })
 
-    try {
-      await room.init(this.swarm)
-      this.rooms.set(keyHex, room)
-    } finally {
-      this._pendingRooms.delete(keyHex)
-    }
-    return room
+    socket.on('error', (err) => {
+      console.error('[bridge] Socket error: %s', err.message)
+    })
+
+    socket.on('close', () => {
+      this._sockets.delete(id)
+      this.stdio.send({ type: 'member_left', pubkey: id, room_key: this.getTopicHex() })
+    })
   }
 
-  async sendMessage (chatId, text) {
-    let room = this.rooms.get(chatId)
-    if (!room) {
-      const key = b4a.from(chatId, 'hex')
-      room = await this.createRoom(key)
+  sendMessage (chatId, text) {
+    let count = 0
+    for (const [id, socket] of this._sockets) {
+      try {
+        socket.write(b4a.from(text, 'utf-8'))
+        count++
+      } catch (err) {
+        console.error('[bridge] Send error: %s', err.message)
+      }
     }
-    const block = await room.append({
-      type: 0,
-      content: text,
-      sender: this.identity.publicKey,
-      timestamp: Date.now()
-    })
-    return block
+    return count
+  }
+
+  getPeerCount () { return this._sockets.size }
+  getActiveAddress () {
+    return this._inviteUrl ? { host: 'blind-pairing', port: this._inviteUrl.slice(0, 30) } : null
   }
 
   async stop () {
     this._listening = false
+    for (const [, s] of this._sockets) try { s.destroy() } catch {}
+    this._sockets.clear()
+    if (this._server) await this._server.close()
     if (this.swarm) await this.swarm.destroy()
-    if (this.dht) { this.pairing?.close(); await this.dht.destroy() }
-    if (this.profileServer) await this.profileServer.close()
+    if (this.dht) await this.dht.destroy()
     if (this.stdio) await this.stdio.stop()
-    for (const room of this.rooms.values()) {
-      room.close()
-    }
-    for (const [key, conn] of this._peerConnections) {
-      try { conn.destroy() } catch (e) {}
-    }
-    this._peerConnections.clear()
     console.error('[bridge] Stopped')
   }
 }
 
 let bridge = null
 if (require.main === module) {
-  bridge = new KeetBridge()
+  bridge = new KeetBlindBridge()
   bridge.start().catch((err) => {
     console.error('[bridge] Fatal:', err)
-    process.exit(1)
+    if (typeof process !== 'undefined') process.exit(1)
   })
 }
-module.exports = KeetBridge
+module.exports = KeetBlindBridge
 
-process.on('SIGINT', () => {
-  if (bridge) bridge.stop().then(() => process.exit(0))
-  else process.exit(0)
-})
-process.on('SIGTERM', () => {
-  if (bridge) bridge.stop().then(() => process.exit(0))
-  else process.exit(0)
-})
+if (typeof process !== 'undefined') {
+  process.on('SIGINT', () => { if (bridge) bridge.stop().then(() => process.exit(0)) })
+  process.on('SIGTERM', () => { if (bridge) bridge.stop().then(() => process.exit(0)) })
+}
