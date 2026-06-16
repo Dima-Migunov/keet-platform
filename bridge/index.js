@@ -80,63 +80,9 @@ class KeetBridge {
     // announcer never adds relay addresses, so the invite-keypair
     // announcement expires immediately after creation.
     await this.dht.ready()
-    try {
-      // Determine the external address by pinging a bootstrap node.
-      // With symmetric NAT the serverSocket port differs from the port
-      // other peers see. We need the *external* port for relayAddresses.
-      const host = this.dht.host
-      let port = this.dht.io.serverSocket.address().port
-
-      try {
-        const bootstrap = { host: '88.99.3.86', port: 49737 }
-        const result = await Promise.race([
-          this.dht.ping(bootstrap),
-          new Promise((_, r) => setTimeout(() => r(new Error('stun-timeout')), 5000))
-        ])
-        if (result && result.to && result.to.port) {
-          port = result.to.port
-          console.error('[bridge] External port from STUN: %d (local: %d)', port, this.dht.io.serverSocket.address().port)
-        }
-      } catch (e) {
-        console.error('[bridge] STUN ping failed, using local port:', e.message)
-      }
-
-      // Force the NatSampler to adopt our external address.
-      const nat = this.dht._nat
-      nat._a = { host, port, hits: 20 }
-      nat._b = { host, port, hits: 20 }
-      nat._samples = []
-      for (let i = 0; i < 32; i++) {
-        nat._samples.push({ host, port, hits: 20 })
-      }
-      nat.size = 32
-      nat._threshold = 29
-      nat._top = 0
-
-      const fixedHost = host
-      const fixedPort = port
-
-      Object.defineProperty(nat, 'host', {
-        get: () => fixedHost,
-        set: () => {},
-        configurable: true
-      })
-      Object.defineProperty(nat, 'port', {
-        get: () => fixedPort,
-        set: () => {},
-        configurable: true
-      })
-
-      this.dht.firewalled = false
-      this.dht.io.firewalled = false
-
-      // Store external address for use by pairing.js
-      this._externalAddress = { host, port }
-
-      console.error('[bridge] DHT nat set: %s:%d', host, port)
-    } catch (e) {
-      console.error('[bridge] DHT nat setup failed:', e.message)
-    }
+    console.error('[bridge] DHT ready, host=%s', this.dht.host)
+    // Do NOT force NatSampler — let the DHT's built-in relay mechanism
+    // handle connectivity through symmetric NAT automatically.
 
     // Blind-pairing for invite links
     this.pairing = new PairingManager(this.dht, this)

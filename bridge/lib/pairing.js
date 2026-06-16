@@ -54,32 +54,11 @@ class PairingManager {
     }
 
     // Derive the bridge's own DHT address for additionalNodes
-    // so the phone can find us without relying on DHT findPeer.
+    // so the phone has alternative routes to find us.
+    // NOTE: We only include additionalNodes if we're confident the address
+    // works for inbound connections. Behind symmetric NAT the STUN port
+    // is transient — skip it and rely on DHT announce + relay instead.
     let additionalNodes = null
-    try {
-      // Use the STUN-discovered external address if available
-      const extAddr = this.bridge._externalAddress
-      if (extAddr && extAddr.host && extAddr.port) {
-        additionalNodes = [{ host: extAddr.host, port: extAddr.port }]
-        console.error('[pairing] Including additionalNode (STUN): %s:%d', extAddr.host, extAddr.port)
-      } else {
-        // Fallback: use dht.remoteAddress or socket address
-        const addr = this.bridge.dht.remoteAddress()
-        if (addr && addr.host && addr.port) {
-          additionalNodes = [{ host: addr.host, port: addr.port }]
-          console.error('[pairing] Including additionalNode: %s:%d', addr.host, addr.port)
-        } else {
-          const sockAddr = this.bridge.dht.io.serverSocket.address()
-          if (sockAddr && sockAddr.port) {
-            const host = this.bridge.dht.host || sockAddr.host
-            additionalNodes = [{ host, port: sockAddr.port }]
-            console.error('[pairing] Including additionalNode (fallback): %s:%d', host, sockAddr.port)
-          }
-        }
-      }
-    } catch (e) {
-      console.error('[pairing] Could not determine additionalNode:', e.message)
-    }
 
     // Create the blind-pairing invite.
     // The `key` here is the room topicKey; discoveryKey is derived from it.
@@ -130,35 +109,19 @@ class PairingManager {
    *
    * The Keet app decodes the invite to get the discoveryKey, does
    * swarm.join(discoveryKey) which triggers a DHT lookup, finds our
-   * announce record, obtains our relayAddresses, and connects.
+   * announce record, and connects via DHT relay/holepunching.
+   *
+   * IMPORTANT: We do NOT set relayAddresses. Behind symmetric NAT the
+   * STUN-discovered port is only valid for the STUN flow itself, not for
+   * inbound connections. Setting it in relayAddresses would make clients
+   * waste time trying a dead address before falling back to DHT relay.
+   * Instead we rely on HyperDHT's built-in relay mechanism through its
+   * distributed relay nodes, which works even through symmetric NAT.
    */
   async _startServer(keyPair, ticket, discoveryKey) {
-    // Determine relay addresses for the invite DHT server.
-    // These are published in the DHT announce record so remote clients
-    // know where to connect. With symmetric NAT the STUN-discovered port
-    // is the only externally reachable address.
-    let relayAddresses = []
-    try {
-      const extAddr = this.bridge._externalAddress
-      if (extAddr && extAddr.host && extAddr.port) {
-        relayAddresses.push({ host: extAddr.host, port: extAddr.port })
-        console.error('[pairing] Server relayAddress (STUN): %s:%d', extAddr.host, extAddr.port)
-      } else {
-        const sockAddr = this.dht.io.serverSocket.address()
-        if (sockAddr && sockAddr.port) {
-          const host = this.dht.host || sockAddr.host
-          relayAddresses.push({ host, port: sockAddr.port })
-          console.error('[pairing] Server relayAddress: %s:%d', host, sockAddr.port)
-        }
-      }
-    } catch (e) {
-      console.error('[pairing] Could not determine relayAddress:', e.message)
-    }
-
     // Step 1: Create a DHT server on the invite keyPair.
-    // The Keet app derives the same keyPair from the invite seed,
-    // so it can establish a Noise-encrypted connection to us.
-    const server = this.dht.createServer({ relayAddresses })
+    // No relayAddresses — for symmetric NAT, rely on DHT's built-in relay.
+    const server = this.dht.createServer()
     server.on('connection', noiseSocket => {
       const remoteKey = noiseSocket.remotePublicKey
         ? b4a.toString(noiseSocket.remotePublicKey, 'hex').slice(0, 16)
@@ -187,12 +150,10 @@ class PairingManager {
 
     // Step 2: Announce the discoveryKey in the DHT.
     // This is the key that the Keet app looks up when joining the invite.
-    // The announce record maps discoveryKey → inviteKeyPair.publicKey + relayAddresses,
-    // so the app can find and connect to us even behind symmetric NAT.
-    //
-    // We use dht.announce() which handles periodic refresh internally.
+    // No relayAddresses — let DHT's built-in relay mechanism handle
+    // connectivity through symmetric NAT.
     try {
-      const announceStream = this.dht.announce(discoveryKey, keyPair, relayAddresses)
+      const announceStream = this.dht.announce(discoveryKey, keyPair)
       server._announceStream = announceStream
       console.error('[pairing] Announced discoveryKey for ticket=%s', ticket.slice(0, 16))
 
