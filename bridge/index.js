@@ -64,9 +64,8 @@ class KeetBridge {
       console.error('[bridge] Identity:', b4a.toString(this.identity.publicKey, 'hex'))
     }
 
-    // Use a fixed DHT port so remoteAddress() can resolve correctly.
-    // Port 49737 is typically taken by the gateway manager's DHT.
-    const DHT_PORT = 60001
+    // Use a DHT port within the host's allowed port range (10000-20000)
+    const DHT_PORT = 15000
 
     // Create DHT using the identity key pair with an explicit port.
     this.dht = new DHT({

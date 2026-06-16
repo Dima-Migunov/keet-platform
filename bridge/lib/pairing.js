@@ -55,12 +55,19 @@ class PairingManager {
       room = await this.bridge.createRoom(topicKey)
     }
 
-    // Derive the bridge's own DHT address for additionalNodes
-    // so the phone has alternative routes to find us.
-    // NOTE: We only include additionalNodes if we're confident the address
-    // works for inbound connections. Behind symmetric NAT the STUN port
-    // is transient — skip it and rely on DHT announce + relay instead.
+    // Include the bridge's direct address as additionalNodes so the
+    // phone can connect directly via port 15000 (forwarded by Docker).
+    // This bypasses DHT discovery if the Keet app supports additionalNodes.
     let additionalNodes = null
+    try {
+      const host = this.bridge.dht.host
+      if (host && host !== '0.0.0.0' && host !== '127.0.0.1') {
+        additionalNodes = [{ host, port: 15000 }]
+        console.error('[pairing] additionalNode: %s:%d', host, 15000)
+      }
+    } catch (e) {
+      console.error('[pairing] additionalNode error:', e.message)
+    }
 
     // Create the blind-pairing invite.
     // The `key` here is the room topicKey; discoveryKey is derived from it.
@@ -100,54 +107,54 @@ class PairingManager {
   }
 
   /**
-   * Start listening for incoming candidate connections via Hyperswarm.
+   * Start listening for incoming candidate connections via DHT server.
    *
-   * Creates a dedicated Hyperswarm instance for this invite that joins
-   * the discoveryKey topic. This is how Keet/Pear Runtime natively
-   * handles invites — the phone's Keet app does swarm.join(discoveryKey,
-   * { server: false }) and Hyperswarm handles DHT discovery, relay, and
-   * holepunching automatically through the global DHT network.
+   * Creates a DHT server on the invite's seed keyPair for the
+   * blind-pairing Noise handshake. Announces the invite's discoveryKey
+   * pointing to the BRIDGE'S identity keyPair — not the invite seed
+   * keyPair — so the phone connects through the welcome room's already-
+   * established DHT relay connections.
    */
-  _startServer(keyPair, ticket, discoveryKey) {
-    const swarm = new Hyperswarm({
-      keyPair,
-      dht: this.dht,
-      maxClientConnections: 4
-    })
-
-    swarm.on('connection', (noiseSocket, info) => {
+  async _startServer(keyPair, ticket, discoveryKey) {
+    // Create DHT server on invite seed keyPair for the Noise handshake
+    const server = this.dht.createServer()
+    server.on('connection', noiseSocket => {
       const remoteKey = noiseSocket.remotePublicKey
         ? b4a.toString(noiseSocket.remotePublicKey, 'hex').slice(0, 16)
         : 'unknown'
-      console.error('[pairing] INCOMING CONNECTION ticket=%s remote=%s client=%s',
-        ticket.slice(0, 16), remoteKey, info.client)
-
+      console.error('[pairing] INCOMING CONNECTION ticket=%s remote=%s',
+        ticket.slice(0, 16), remoteKey)
       noiseSocket.on('data', rawBuf => {
-        const len = rawBuf.length
-        const first = rawBuf[0]
-        console.error('[pairing] DATA ticket=%s len=%d first_byte=%d',
-          ticket.slice(0, 16), len, first)
+        console.error('[pairing] DATA ticket=%s len=%d', ticket.slice(0, 16), rawBuf.length)
         this._handleIncoming(rawBuf, noiseSocket, ticket)
       })
       noiseSocket.on('error', (err) => {
-        console.error('[pairing] conn error ticket=%s: %s',
-          ticket.slice(0, 16), err.message)
+        console.error('[pairing] conn error ticket=%s: %s', ticket.slice(0, 16), err.message)
       })
       noiseSocket.on('close', () => {
-        console.error('[pairing] conn CLOSED ticket=%s',
-          ticket.slice(0, 16))
+        console.error('[pairing] conn CLOSED ticket=%s', ticket.slice(0, 16))
       })
     })
 
-    // Join the discoveryKey topic — Hyperswarm handles DHT announce +
-    // relay node connections automatically.
-    swarm.join(discoveryKey, { server: true })
-    // Also flush immediately so the announce propagates faster
-    swarm.flush()
+    await server.listen(keyPair)
+    console.error('[pairing] Server listening on invite keyPair for ticket=%s', ticket.slice(0, 16))
 
-    console.error('[pairing] Swarm joined discoveryKey for ticket=%s', ticket.slice(0, 16))
+    // Announce discoveryKey pointing to the BRIDGE IDENTITY keyPair
+    // (not invite seed keyPair). This way the phone connects through
+    // the welcome room's DHT relay connections which are already
+    // established and findable.
+    try {
+      const identityKP = this.bridge.identity.keyPair
+      const announceStream = this.dht.announce(discoveryKey, identityKP)
+      server._announceStream = announceStream
+      announceStream.finished().catch(() => {})
+      console.error('[pairing] Announced discoveryKey → identity keyPair for ticket=%s',
+        ticket.slice(0, 16))
+    } catch (e) {
+      console.error('[pairing] Announce failed for ticket=%s: %s', ticket.slice(0, 16), e.message)
+    }
 
-    this._servers.set(ticket, swarm)
+    this._servers.set(ticket, server)
   }
 
   /**
