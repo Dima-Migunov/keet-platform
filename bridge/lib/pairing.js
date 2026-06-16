@@ -56,14 +56,14 @@ class PairingManager {
     }
 
     // Include the bridge's direct address as additionalNodes so the
-    // phone can connect directly via port 15000 (forwarded by Docker).
+    // phone can connect directly via port 11000 (forwarded by Docker).
     // This bypasses DHT discovery if the Keet app supports additionalNodes.
     let additionalNodes = null
     try {
       const host = this.bridge.dht.host
       if (host && host !== '0.0.0.0' && host !== '127.0.0.1') {
-        additionalNodes = [{ host, port: 15000 }]
-        console.error('[pairing] additionalNode: %s:%d', host, 15000)
+        additionalNodes = [{ host, port: 11000 }]
+        console.error('[pairing] additionalNode: %s:%d', host, 11000)
       }
     } catch (e) {
       console.error('[pairing] additionalNode error:', e.message)

@@ -216,22 +216,56 @@ class JsonStdio {
       const blind = require('blind-pairing-core')
       const crypto = require('hypercore-crypto')
       const b4a = require('b4a')
+      const c = require('compact-encoding')
 
       // Decode invite URL: keet://chat/<z32 buffer>
       const buf = z32.decode(url.replace('keet://chat/', ''))
-      // First 66 bytes = base Invite
+
+      // Keet phone app may encode version as ASCII '1' (49) instead of
+      // binary 1. Normalize it so decodeInvite doesn't reject.
+      if (buf[0] !== 1) buf[0] = 1
+
+      // First 66 bytes = base Invite (version + flags + seed + discoveryKey)
       const baseBuf = buf.slice(0, 66)
       const decoded = blind.decodeInvite(baseBuf)
       const inviteKP = crypto.keyPair(decoded.seed)
 
       console.error('[stdio] Joining invite: discoveryKey=%s', b4a.toString(decoded.discoveryKey, 'hex').slice(0, 16))
 
-      // Connect to the host via DHT
       const dht = this.bridge.dht
-      const conn = dht.connect(inviteKP.publicKey)
+
+      // Step 1: Look up the discoveryKey in DHT to find the phone's peer
+      console.error('[stdio] Looking up discoveryKey in DHT...')
+      const peer = await new Promise((resolve, reject) => {
+        const lookup = dht.lookup(decoded.discoveryKey)
+        const timeout = setTimeout(() => {
+          lookup.destroy()
+          reject(new Error('DHT lookup timeout - peer not found'))
+        }, 20000)
+
+        lookup.on('data', (data) => {
+          if (data.peers && data.peers.length > 0) {
+            clearTimeout(timeout)
+            lookup.destroy()
+            console.error('[stdio] Found', data.peers.length, 'peer(s) for invite')
+            resolve(data.peers[0])
+          }
+        })
+        lookup.on('end', () => {
+          clearTimeout(timeout)
+          reject(new Error('Lookup stream ended with no peers'))
+        })
+        lookup.on('error', reject)
+      })
+
+      console.error('[stdio] Peer publicKey:', b4a.toString(peer.publicKey, 'hex').slice(0, 16) + '...')
+      console.error('[stdio] Peer relayAddresses:', JSON.stringify(peer.relayAddresses))
+
+      // Step 2: Connect to the phone via DHT
+      const conn = dht.connect(peer.publicKey, { relayAddresses: peer.relayAddresses })
 
       const result = await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Connection timeout')), 30000)
+        const timeout = setTimeout(() => reject(new Error('DHT connect timeout')), 30000)
         conn.on('open', () => {
           clearTimeout(timeout)
           console.error('[stdio] DHT connected to invite host')
@@ -242,7 +276,7 @@ class JsonStdio {
           conn.write(encoded)
 
           // Wait for response
-          const responseTimeout = setTimeout(() => reject(new Error('No response')), 15000)
+          const responseTimeout = setTimeout(() => reject(new Error('No response from host')), 15000)
           conn.once('data', (data) => {
             clearTimeout(responseTimeout)
             try {

@@ -65,7 +65,7 @@ class KeetBridge {
     }
 
     // Use a DHT port within the host's allowed port range (10000-20000)
-    const DHT_PORT = 15000
+    const DHT_PORT = 11000
 
     // Create DHT using the identity key pair with an explicit port.
     this.dht = new DHT({
